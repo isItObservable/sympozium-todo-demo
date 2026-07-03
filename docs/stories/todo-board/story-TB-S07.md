@@ -1,96 +1,105 @@
 ---
 story-id: TB-S07
-phase: 5
+phase: 4
 status: READY_FOR_IMPLEMENTATION
 artifact-type: story
-owner: coder
-parent-epic: EPIC-TB-7
-created-by: Story Writer (John)
-trace-from-prd: FR7, FR8, AC4, AC5, G3
-source-epics-file: epics-and-stories.todo-board.md
+owner: coding-agent
+created: 2026-07-03
 ---
 
-# Story TB-S07 — Docker Compose Stack and README with BMAD Artifact Links
+# Story TB-S07 — Docker-Compose Stack, Multi-Stage Backend Build & README with BMAD Artifact Links
 
-As a developer, I want the full stack running in one `docker-compose up` command so anyone can run the app locally for demos or development.
+## As a developer or reviewer, I want the full stack (backend + database + frontend) to start with one `docker-compose up` command and documented in a README that links to all BMAD phase artifacts, so anyone can run and verify the app from zero.
 
-> **Maps to PRD AC4 (README), G3 (hosting)**  
-> **Maps to Architecture:** ADR-001 (boring tech: no framework lock-in, simple compose stack)  
-> **Previous Epic Story:** "Docker-compose stack and README with BMAD artifact links"
+**Maps to**: PRD FR7 (Containerization & Local Stack), FR8 (Observability & Testability — test execution docs), AC4 (`docker-compose up` works), AC5 (README documents architecture, local setup, tests, BMAD links), G3 (single-command stack), G4 (tests 80%+ line coverage confirmed)  
+**ADR References**: ADR-004 (project structure including docker-compose.yml, Dockerfile, Makefile)
 
----
+## Background / Context
 
-## Context
+PRD requires: "Each service (backend, database, frontend) MUST be containerized. A `docker-compose.yml` at the project root starts the full stack with one command."
 
-This story packages everything into a local development environment using Docker Compose. The stack includes the Go backend, Nginx serving the static frontend, and PostgreSQL as the database. All services are orchestrated via a single `docker-compose.yml`.
-
-The README must document architecture diagram, setup steps, test execution commands, and link to all BMAD phase artifacts (PRD, Architecture doc, Epics/Stories).
-
----
+The README serves as both onboarding and BMAD artifact manifest — anyone examining repo history must see Phase 1→4 deliverables linked.
 
 ## Acceptance Criteria (Given/When/Then)
 
-### AC1: docker-compose.yml defines backend, frontend + database services
+### AC1: `docker-compose.yml` defines exactly three services
 
-**Given**: The repository root contains `docker-compose.yml`  
-**When**: Docker Compose parses the file (`docker compose config` runs with no errors)  
-**Then**: Three services are defined:
-  - **backend**: Go binary (multi-stage build from Dockerfile), port forwarded to host 8080
-  - **frontend**: Nginx container serving static files from `frontend/`, port 80 on host
-  - **postgres**: PostgreSQL service with named volume for data persistence
+**Given** the project root contains `.env` or `.env.example` with DATABASE_URL and other config  
+**When** a user examines the top-level `docker-compose.yml`  
+**THEN** the file defines these exact services:
+- **backend**: built from `Dockerfile`, depends on `db`, ports 8080 mapped (or same port for single-container setup), environment variables from `.env`: `{DATABASE_URL, OTEL_EXPORTER_JAEGER_ENDPOINT?, OTEL_EXPORTER_PROMETHEUS_ENDPOINT?}`
+- **db**: using either `postgres:15-alpine` image or `sqlite` volume mount (configurable via env): `POSTGRES_DB=todo`, `POSTGRES_USER=todo`, `POSTGRES_PASSWORD=todo`
+- **frontend** or **nginx**: serving `frontend/` static files on port 80, proxying `/api/*` to the backend service
 
-### AC2: docker-compose up -d starts all services with no errors
+**Scenario 1.1: Configurable database backend**
+- **Given** DATABASE_URL is set in `.env`  
+- **When** compose starts  
+- **THEN** if DATABASE_URL starts with `postgres://`, uses the Postgres service; if it starts with `file:` or is empty, runs SQLite in-memory or file-backed in the same container
 
-**Given**: Docker and Docker Compose are installed  
-**When**: A user runs `docker compose up -d` in the repo root from a clean state  
-**THEN**: The command completes without errors (exit code 0)
-**AND**: All three containers show `Up` status via `docker ps`
-**AND**: PostgreSQL has initialized its data directory successfully
+### AC2: `docker-compose up -d` starts all services with no errors within 30 seconds
 
-### AC3: Board accessible at http://localhost in a browser after compose starts
+**Given** Docker and docker-compose are installed  
+**When** a user runs `docker-compose up -d` from the project root  
+**THEN**:
+- All three services transition to "healthy" or "running" state within 30 seconds
+- No error output appears in `docker-compose logs`
+- Services start in the correct order (db first, then backend depends-on-db, then frontend)
 
-**Given**: Compose stack is running (`docker compose up -d`)  
-**When**: A user opens `http://localhost` in a browser  
-**THEN**: The Kanban board UI loads and displays correctly (no 502/504 proxy errors)
-**AND**: API calls from the frontend to `/api/columns/` succeed (verified via browser DevTools Network tab showing 200 responses)
+### AC3: The Kanban board is accessible in a browser at `http://localhost`
 
-### AC4: README documents architecture diagram, setup steps, test commands, BMAD artifact links
+**Given** `docker-compose up -d` completed successfully  
+**When** a user opens `http://localhost` in their browser  
+**THEN**:
+- The board renders horizontally with columns and notes
+- No HTTP 404 or blank page errors are returned
+- The browser console shows no unhandled JS fetch errors
 
-**Given**: A user opens `README.md` in the repo root  
-**When**: They read through it
-**THEN**: They find a text-based architecture diagram showing Backend → PostgreSQL → Frontend topology (ASCII art or Mermaid)
-**AND**: Step-by-step instructions for local setup: "clone → docker compose up → open localhost"
-**AND**: Test execution section with commands:
-**AND**: `go test ./...` for backend integration tests
-**AND**: Links to all BMAD phase artifacts:
-  - PRD.md (`docs/prd.md`)
-  - Architecture.md (`docs/architecture.md`)
-  - Epics & Stories (`docs/epics-and-stories.*.md`)
+### AC4: README documents architecture diagram, local setup, test commands, and BMAD artifact links
 
-### AC5: Backend integration tests run inside container (`go test ./...` succeeds)
+**Given** `README.md` exists at the project root  
+**When** a human reads it  
+**THEN** it contains ALL of these sections:
+1. **Architecture Diagram** (text-based or Mermaid) showing backend → db and frontend flow
+2. **Local Setup**: step-by-step `docker-compose up` instructions + `.env` configuration
+3. **Test Execution**: how to run unit tests (`go test ./...`) and API integration tests locally
+4. **API Endpoints**: a table listing all REST endpoints (from ADR-002) with sample curl commands
+5. **BMAD Phase Artifacts** — clickable links to: this PRD, Architecture doc (all ADRs), this Epic/Stories backlog
+6. **Folder Layout** explanation matching ADR-004
 
-**Given**: All services are up via `docker compose up -d`  
-**WHEN**: A shell script runs inside the backend container: `docker compose exec backend go test ./...`  
-**AND**: The same command is available in Makefile as `make test-backend`
-**THEN**: The command completes with exit code 0 and shows that all integration tests pass
+### AC5: Backend integration tests run inside a Docker container successfully
+
+**Given** the backend service image is built  
+**When** a user runs `docker-compose run --rm backend go test ./...` or `make test`  
+**THEN**:
+- All unit and API tests pass (exit code 0)
+- Tests use the same SQLite backend as development (no external mocks of the database driver)
+
+**Scenario 5.1: Test against PostgreSQL**
+- **Given** the Postgres service is started via compose  
+- **When** `DATABASE_URL=postgres://todo:todo@db:5432/todo go test ./...` runs in the container  
+- **THEN** the same tests pass on PostgreSQL (not only SQLite)
+
+## Technical Implementation Notes
+
+- `Dockerfile` for backend uses multi-stage build:
+  - Stage 1: `golang:1.22-alpine` builder — `go mod download`, `go build -o bin/server`
+  - Stage 2: `alpine:3.19` — copy binary, non-root user
+- `docker-compose.yml`: use `depends_on` with health check condition to ensure db starts before backend
+- For frontend: either a separate nginx image (`nginx:alpine`) serving `./frontend:/usr/share/nginx/html:ro`, or serve frontend from the Go backend via a single Dockerfile using the same binary (since ADR-001 allows one binary — use Go's `http.FileServer` to serve `/` and the static folder)
+- `.env.example` contains placeholder values for all configuration variables
+
+## Output / Deliverables
+
+1. Top-level `docker-compose.yml`
+2. Top-level `Dockerfile` (multi-stage backend build)
+3. `.env.example` with DATABASE_URL and optional OTEL config
+4. Top-level `Makefile` with targets: `build`, `migrate-up`, `serve`, `test`, `db-start`, `stop`
+5. Updated `README.md` at project root (with architecture, setup, tests, BMAD links)
+
+## Dependencies: All backend stories (TB-S01 through TB-S06) must be implemented first
+
+## Estimate: S
 
 ---
 
-## Implementation Notes
-
-- `Dockerfile`: Multi-stage build for Go:
-  - Stage 1 (`golang:1.23-alpine`): `go mod download`, `go build -o /bin/app ./cmd/api`
-  - Stage 2 (`alpine:latest`): Copy binary from stage 1, expose port 8080
-- `docker-compose.yml`: Three services (backend, frontend, postgres). Frontend uses `nginx:alpine`, mounts `./frontend:/usr/share/nginx/html:ro`. Backend depends_on postgres. Use named volume for data persistence.
-- Nginx config (`frontend/nginx.conf`) reverse proxy from `/api/` to backend:8080 and serve static files otherwise.
-- Add `Makefile` with targets: `make build`, `make up`, `make down`, `make test-backend`, `make migrate`.
-
----
-
-## Dependencies
-
-Requires: TB-S01 through TB-S06 (backend code + frontend UI must be complete)
-
-## Estimate
-
-S (1–2 hours for a developer comfortable with Docker and Nginx config)
+*Written by Story Writer — traces to PRD FR7/FR8/AC4/AC5/G3/G4, Architecture ADR-004/ADR-007*

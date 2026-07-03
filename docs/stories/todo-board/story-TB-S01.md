@@ -1,111 +1,140 @@
 ---
 story-id: TB-S01
-phase: 5
+phase: 4
 status: READY_FOR_IMPLEMENTATION
 artifact-type: story
-owner: coder
-parent-epic: EPIC-TB-1
-created-by: Story Writer (John)
-trace-from-prd: AC2, G1
-source-epics-file: epics-and-stories.todo-board.md
+owner: coding-agent
+created: 2026-07-03
 ---
 
-# Story TB-S01 — Database Schema & Migration Infrastructure
+# Story TB-S01 — Database Schema Migrations with Cross-Engine Support
 
-As a developer, I want database migrations that create `columns` and `notes` tables with full up/down support, so the application can persist board data across SQLite (dev) and PostgreSQL (prod) environments.
+## As a backend developer, I want database migrations that create `columns` and `notes` tables on both SQLite and PostgreSQL, so the application can persist board data from day one.
 
-> **Maps to PRD Goal:** G1  
-> **Maps to Architecture:** ADR-003 (PostgreSQL/SQLite via DATABASE_URL), ADR-001  
-> **Previous Epic Story:** "Create SQLite/Postgres migrations for columns and notes tables"
+**Maps to**: PRD FR5 (Database Persistence), FR2/FR4 (CRUD endpoints need persistent storage)  
+**Traces to PRD AC**: AC1 (endpoints work — depends on migrations), AC2 (migrations run on both SQLite and Postgres)  
+**ADR References**: ADR-003 (PostgreSQL with SQLite dev parity via DATABASE_URL), ADR-003-B (initial schema v1)
 
----
+## Background / Context
 
-## Context
+The PRD requires zero-code swapping between SQLite (local/dev) and PostgreSQL (prod). We use:
+- `modernc.org/sqlite` (pure Go, no CGO) for both engines to produce one static binary
+- `golang-migrate/migrate` — one SQL file per migration, migrations run once on startup
+- Connection via standard `DATABASE_URL` env var
 
-The Kanban board needs two persistent tables: `columns` and `notes`. The system MUST support database swapping via a single `DATABASE_URL` environment variable with zero code changes. For development, SQLite (via `modernc.org/sqlite`, pure Go, no CGO) runs inside the same binary. Production uses PostgreSQL (`pgx/v5`). Migrations are run once on application startup using `golang-migrate/migrate`.
+**ADR-003-B schema** (the target state):
+```sql
+-- For PostgreSQL:
+CREATE TABLE IF NOT EXISTS columns (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    board_scope VARCHAR(255) NOT NULL DEFAULT 'default',
+    title VARCHAR(255) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS notes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    column_id UUID NOT NULL REFERENCES columns(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    body TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_notes_column_id ON notes(column_id);
 
-**Column schema:**
+-- For SQLite: use uuid_generate_v4() or Go crypto/rand for UUIDs.
+-- Note: gen_random_uuid() is not available in SQLite.
 ```
-id          UUID PRIMARY KEY DEFAULT gen_random_uuid()
-board_scope VARCHAR(255) NOT NULL DEFAULT 'default'
-title       VARCHAR(255) NOT NULL
-created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-```
-
-**Note schema:**
-```
-id          UUID PRIMARY KEY DEFAULT gen_random_uuid()
-column_id   UUID NOT NULL REFERENCES columns(id) ON DELETE CASCADE
-title       VARCHAR(255) NOT NULL
-body        TEXT
-created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-```
-
-For SQLite compatibility, generate UUIDs in Go via `crypto/rand` and use raw `CREATE TABLE ...` without relying on DB-generated IDs.
-
----
 
 ## Acceptance Criteria (Given/When/Then)
 
-### AC1: Columns table creation — PostgreSQL
+### AC1: Migration creates `columns` table with all required columns
 
-**Given** a running PostgreSQL database with empty schema  
-**When** the application starts with `DATABASE_URL=postgres://user@host/db` and no migrations have been applied  
-**Then** migration 001 up is executed automatically and the `columns` table becomes visible in `\dt` output  
-**And** all five columns (id, board_scope, title, created_at, updated_at) exist with correct types and constraints
-**AND** the primary key on `id` is present
+**Given** a fresh database and DATABASE_URL pointing to either PostgreSQL or SQLite  
+**When** the application starts and runs pending migrations  
+**Then** the `columns` table EXISTS with exactly these columns:
+- `id TEXT PRIMARY KEY` (UUID string)
+- `board_scope TEXT NOT NULL DEFAULT 'default'`
+- `title TEXT NOT NULL`
+- `created_at TIMESTAMPTZ NOT NULL` (auto-set to current timestamp)
+- `updated_at TIMESTAMPTZ NOT NULL` (auto-set to current timestamp)
 
-### AC2: Notes table creation
+**Scenario 1.1: PostgreSQL**
+- **Given** an empty PostgreSQL database  
+- **When** migration is applied on startup  
+- **Then** the table has all columns and a default of `'default'` on `board_scope`
 
-**Given** migration 001 has been applied (`columns` table exists)  
-**When** migration 002 up runs  
-**Then** the `notes` table becomes visible in `\dt` output  
-**And** all six columns (id, column_id, title, body, created_at, updated_at) are correctly declared
-**AND** a foreign key constraint exists: `(column_id REFERENCES columns(id) ON DELETE CASCADE)`
-**AND** an index `idx_notes_column_id` is visible in `\di` output
+**Scenario 1.2: SQLite**
+- **Given** an empty `.db` file in memory or on disk  
+- **When** migration is applied  
+- **THEN** the same table structure exists (SQLite-compatible syntax)
 
-### AC3: Migration works on SQLite
+### AC2: Migration creates `notes` table with FK constraint and index
 
-**Given** no SQLite database file exists  
-**When** the application starts with `DATABASE_URL=sqlite:///board.db` (or `file::memory:?cache=shared`)  
-**Then** both migrations 001+002 execute without errors
-**And** `SELECT sql FROM sqlite_master WHERE type='table' ORDER BY name;` reveals `columns` and `notes` tables with structures equivalent to the PG schemas
-**And** UUIDs can be inserted successfully from Go (generated via `crypto/rand`)
+**Given** a database that has already had the columns table created (same v1 migration)  
+**When** the application starts  
+**Then** the `notes` table EXISTS with:
+- `id TEXT PRIMARY KEY` (UUID)
+- `column_id TEXT NOT NULL` → FOREIGN KEY REFERENCES columns(id) ON DELETE CASCADE
+- `title TEXT NOT NULL`
+- `body TEXT` (nullable)
+- `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
+- `updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
+- A GIN or BTREE index on `column_id` (`idx_notes_column_id`)
 
-### AC4: Down-migration drops tables safely
+### AC3: Migration runs successfully on both SQLite and PostgreSQL
 
-**Given** migrations 001+002 are applied (on either PG or SQLite)  
-**When** down-migrations run in reverse order (`002.down.sql` then `001.down.sql`)  
-**Then** no errors are returned from the migration runner
-**And** the `\dt` output (PG) or `sqlite_master` table confirm both tables have been dropped
-**AND** subsequent re-application of up-migrations recreates the exact same structure
+**Given** a fresh PostgreSQL 15+ container with DATABASE_URL set correctly  
+**When** the Go application calls `migrate.Up()`  
+**Then** it returns `nil` error and both tables exist with data
 
-### AC5: Idempotent startup — no duplicate migrations on restart
+**Given** an empty SQLite in-memory or file store with DATABASE_URL pointing there  
+**When** the same `migrate.Up()` is called  
+**THEN** it returns `nil` error and both tables exist with data identically
 
-**Given** all migrations are already applied  
-**When** the application is stopped and started three consecutive times with the same `DATABASE_URL`
-**Then** no errors occur during migration steps
-**And** the database state after each start contains exactly one set of tables (no duplicates or conflicts)
+### AC4: Down-migration drops tables safely without errors
+
+**Given** a database that has migrations applied (v1)  
+**When** the application calls `migrate.Down()`  
+**Then**:
+- Both `columns` and `notes` tables are dropped
+- No error is returned
+- A second call to `Down()` on already-down state returns gracefully (idempotent or a known non-fatal error that does not crash)
+
+### AC5: Migration runner logs which version was applied
+
+**Given** migrations run at startup  
+**When** the application starts  
+**Then** the log contains a structured info-level entry like:
+```json
+{"ts":"...","level":"INFO","msg":"migrations completed","applied_version":1,"db":"sqlite"}
+```
+or for PostgreSQL:
+```json
+{"ts":"...","level":"INFO","msg":"migrations completed","applied_version":1,"db":"postgres"}
+```
+
+## Technical Implementation Notes
+
+- In `internal/db/migrate.go`: use `golang-migrate` with embedded SQL files via `fsmig` or `go:embed`
+- Two migration files in `internal/db/migrations/`:
+  - `001_create_columns_and_notes.up.sql`
+  - `001_create_columns_and_notes.down.sql`
+- For SQLite UUID generation: use `gen_uuid()` if the extension is loaded, or generate UUIDs in Go via `crypto/rand` and pass as strings — this avoids `gen_random_uuid()` which is PostgreSQL-only
+- The migration runner runs **exactly once** at application startup (not per-request)
+
+## Output / Deliverables
+
+1. Migration SQL files (up + down) in `internal/db/migrations/`
+2. Migration runner in `internal/db/migrate.go` that:
+   - Reads DATABASE_URL env var
+   - Runs pending migrations on startup
+   - Returns an error to main if schema cannot be created (application fails open)
+
+## Dependencies: none
+
+## Estimate: S
 
 ---
 
-## Implementation Notes
-
-- Use `golang-migrate/migrate/v4` — call `migrate.Up()` once during server startup in `main.go`.
-- Migration SQL files live at: `backend/migrations/001_create_columns.up.sql`, `.down.sql`, `002_create_notes.up.sql`, `.down.sql`.
-- For SQLite, the `.db` file is auto-created on first `sql.Open("sqlite", ...)`. Ensure parent directory exists before migration.
-- Use `github.com/google/uuid` for consistent UUID generation across both drivers; pass via `INSERT` statements (not default values).
-- Write a shared helper `func SetupDB(url string) (*sql.DB, error)` in `internal/db/db.go` that handles the database URL switch logic and runs migrations.
-- Test both backends: add a file `backend/internal/db/db_test.go` with test helpers that create databases from temporary paths or use `testify/mocks`.
-
----
-
-## Dependencies
-
-**None.** This story is foundational — no other code depends on it, but all subsequent stories do.
-
-## Estimate
-
-S (1–2 hours for a Go developer familiar with `database/sql`)
+*Written by Story Writer — traces to PRD FR5/AC2, Architecture ADR-003/ADR-003-B*
