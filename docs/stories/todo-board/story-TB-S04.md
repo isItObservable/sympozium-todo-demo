@@ -1,97 +1,105 @@
 ---
 story-id: TB-S04
-phase: 5
+phase: 4
 status: READY_FOR_IMPLEMENTATION
 artifact-type: story
-owner: coder
-parent-epic: EPIC-TB-4
-created-by: Story Writer (John)
-trace-from-prd: FR3, FR4, FR8, AC1
-source-epics-file: epics-and-stories.todo-board.md
+owner: coding-agent
+created: 2026-07-03
 ---
 
-# Story TB-S04 — POST /api/notes/:id/move Endpoint + Health Check
+# Story TB-S04 — Move Note Endpoint + Health Check
 
-As a frontend developer, I want an API endpoint that reassigns notes between columns (the core Kanban interaction), plus a health check endpoint for operational monitoring.
+## As a frontend developer, I want an API endpoint to reassign notes between columns AND a health probe endpoint, so the Kanban board can display column moves and Kubernetes/docker can monitor service availability.
 
-> **Maps to PRD FR3, FR4, FR8**  
-> **Maps to Architecture:** ADR-002 (REST contract: `POST /api/notes/:id/move` returns moved note object with 200)  
-> **Previous Epic Story:** "POST /notes/:id/move endpoint and health check"
+**Maps to**: PRD FR3 (Move Notes Between Columns), FR4 (Health endpoint)  
+**Traces to PRD AC**: AC1 (correct HTTP methods/status codes for move), AC2 (health returns `{"status":"ok"}` within 5s of container start), AC6 (`docker-compose up` health check works)  
+**ADR References**: ADR-002 (move endpoint contract), ADR-005 Pillar 1 (Health Probes: `/livez`, `/ready`)
 
----
+## Background / Context
 
-## Context
+The move note API is the core "Kanban" behavior — it reassigns a note from one column to another. The health endpoint is required by PRD G3 and AC6 for `docker-compose up` verification.
 
-The move operation is the heart of the Kanban board — allowing cards to flow between columns. This story adds two things:
+**Move endpoint contract (ADR-002)**:
+| Method | Path | Status | Response Body |
+|--------|------|--------|---------------|
+| POST | `/api/notes/:id/move` | 200 | `{Note}` (moved to new column) |
+| — | — | 400 | `columnId is missing from request body` |
+| — | — | 404 | note not found, or column doesn't exist |
 
-1. **Move endpoint**: `POST /api/notes/:id/move` updates a note's `column_id` FK, returns the updated note object.
-2. **Health endpoint**: Simple `GET /health` returning `{"status":"ok"}` — serves as basic readiness check for ops/tooling (liveness/readiness `/livez`/`/readyz` are covered in OBE-2).
-
-**HTTP contract from ADR-002:**
-| Method | Path | Success Response | Error Responses |
-|--------|------|------------------|-----------------|
-| POST | `/api/notes/:id/move` | `{Note}` (moved to new column) 200 | 400 missing field, 404 not found |
-
----
+**Health endpoint contract**:
+- `GET /health` → HTTP 200, body: `{"status":"ok"}`
+- On PRD FR2 + AC2 requirement: response must be within 5s of container start
 
 ## Acceptance Criteria (Given/When/Then)
 
-### AC1: Move a note to a different column successfully
+### AC1: `POST /api/notes/:id/move` reassigns the note and returns 200
 
-**Given** a note `note-1` currently belongs to column `col-A`  
-**AND** column `col-B` exists in the database  
-**WHEN** a client sends `POST /api/notes/note-1/move` with body `{"column_id":"<col-B-uuid>"}`  
-**THEN** the response HTTP status is 200
-**AND** the response body contains the updated note object where:
- - `column_id` value equals `<col-B-uuid>` (the target column)
- - `updated_at` is later than the original timestamp (confirmed via DB query)
-**AND** a subsequent `GET /api/notes/?column_id=<col-B-uuid>` includes this note in its results  
-**AND** a subsequent `GET /api/notes/?column_id=<col-A-uuid>` no longer includes this note
+**Given** a note exists in column A (the source column)  
+**When** a client sends `POST /api/notes/<note-id>/move` with body `{"columnId": "<valid-uuid-of-column-B>"}` where column B is a different valid, existing column  
+**THEN**:
+- The response status is 200 OK
+- The note's `column_id` in the database is now equal to `<column-B-uuid>`
+- The response body contains the full updated note with the new `column_id`
+- A subsequent `GET /api/notes/?column_id=<column-A-id>` does NOT include this note
+- A subsequent `GET /api/notes/?column_id=<column-B-id>` DOES include this note
 
-### AC2: Returns 404 for non-existent note
+### AC2: Move returns 404 for a non-existent note id
 
-**Given** no note exists with UUID `"00000000-0000-0000-0000-000000000001"`  
-**WHEN** a client sends `POST /api/notes/00000000-0000-0000-0000-000000000001/move` with body `{"column_id":"<col-A-uuid>"}`  
-**THEN** the response HTTP status is 404
-**AND** the body follows RFC 7807 format: `{"type":"about:blank","status":404,"title":"Not Found","detail":"note-not-found","instance":"/api/notes/.../move"}`
+**Given** no note exists with id `<nonexistent-uuid>`  
+**When** `POST /api/notes/<nonexistent-uuid>/move` is sent with body `{"columnId": "<valid-column-id>"}`  
+**THEN**:
+- The response status is 404 Not Found
+- The RFC 7807 error body includes `'note not found'`
 
-### AC3: Returns 400 if columnId is missing from request body
+### AC3: Move returns 400 if columnId is missing from request body
 
-**Given** a valid note `note-1` exists  
-**WHEN** a client sends `POST /api/notes/note-1/move` with an empty body `{}` or body without the `"column_id"` key  
-**THEN** the response HTTP status is 400
-**AND** the body follows RFC 7807 format: `{"type":"about:blank","status":400,"title":"Bad Request","detail":"missing column_id field","instance":"/api/notes/note-1/move"}`
+**Given** a valid note exists  
+**When** `POST /api/notes/<valid-note-id>/move` is sent with body `{}` or without a JSON body (or no `columnId` key)  
+**THEN**:
+- The response status is 400 Bad Request
+- The RFC 7807 error body includes `'columnId is required'` or equivalent validation message
 
-### AC4: Move operation validated with API test
+### AC4: Move operation validated with automated API test
 
-**Given** a running backend server  
-**WHEN** the integration test `tests/note_move_test.sh` runs (or equivalent inline Go test)  
-**THEN** the test verifies: successful move between two columns, verification of before/after state via DB query
-**AND**: 404 for invalid note ID, 400 for missing column_id, and cascade-delete confirmation
+**Given** the application is running locally  
+**When** `tests/note_move_test.sh` (or Go integration test) executes  
+**THEN**:
+- It verifies: successful move returns status 200 + note appears in target column
+- It verifies: non-existent note returns 404
+- It verifies: missing columnId returns 400
+- All tests pass (exit code 0)
 
-### AC5: GET /health returns {"status":"ok"} with HTTP 200
+### AC5: `/health` endpoint returns `{"status":"ok"}` with HTTP 200
 
-**Given** the server is running  
-**WHEN** a client sends `GET /health`  
-**THEN** the response HTTP status is 200
-**AND** the body is exactly `{"status":"ok"}` with `Content-Type: application/json`
-**AND**: no authentication or authorization is required to access this endpoint (it is public for healthcheck probes)
+**Given** the application is running (Docker container started or local binary)  
+**When** a client sends `GET /health`  
+**THEN**:
+- The response status is exactly HTTP 200
+- The `Content-Type` header includes `application/json`
+- The body is `{"status":"ok"}` with no extra fields or whitespace issues that break JSON parsing
+
+**Scenario 5.1: Health during startup (within first 10 seconds)**  
+- **Given** the docker container has just been started via `docker-compose up -d`  
+- **When** `curl -s http://localhost:<backend-port>/health` is called within 10 seconds post-startup  
+- **THEN** it returns HTTP 200 with `{"status":"ok"}` (the backend starts fast enough that DB init has completed)
+
+## Technical Implementation Notes
+
+- The move endpoint is a transaction: verify note exists → verify destination column exists → UPDATE note set `column_id = ?` where `id = ?`
+- No FK constraint violation occurs because we validate the target column before the update (returns 400, not a DB error)
+- Health check at `/health` is a separate route from readiness probes (`/ready`, `/livez` per ADR-005 — those are Phase 5 OBE-S01/S02 additions; this story only needs the basic PRD AC2 health endpoint)
+
+## Output / Deliverables
+
+1. Move handler in `internal/http/handler.go` (`handleNoteMove`)
+2. Store method to update column_id: `UpdateNoteColumnID(noteUUID, targetColumnUUID) error`
+3. Health check route `/health` returning `{"status":"ok"}` 
+4. API test file: `tests/note_move_test.sh` or Go equivalent
+
+## Dependencies: TB-S01 (migrations), TB-S02+TB-S03 (columns and notes endpoints must work to provide valid IDs for move tests)
+
+## Estimate: S
 
 ---
 
-## Implementation Notes
-
-- The move handler in `internal/http/handler.go`: parse UUID from path, parse column_id from JSON body, then call `store.UpdateNoteColumn(noteID, newColumnID)`.
-- Use a single SQL update: `UPDATE notes SET column_id=$1, updated_at=NOW() WHERE id=$2 RETURNING *` — all in one transaction to prevent partial state.
-- Validate that the target `column_id` exists before executing the update (SELECT 1 FROM columns WHERE id=target COLL). If it doesn't exist → return 404 or 400? Per ADR-002 contract: "returns 400 missing field" for bad input. I recommend returning 404 if `column_id` does not reference a valid column (FK constraint violation at the HTTP layer).
-- The `/health` endpoint is simplest handler in the codebase — just one line writing JSON and status 200 to the response header.
-
----
-
-## Dependencies
-
-Requires: **TB-S01** (notes table with FK), **TB-S03** (at least two columns exist for move testing)
-
-## Estimate
-
-S (1–2 hours for Go developer)
+*Written by Story Writer — traces to PRD FR3/FR4/AC1/AC2/AC6, Architecture ADR-002/ADR-005-Pillar1*

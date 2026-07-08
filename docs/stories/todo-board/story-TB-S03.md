@@ -1,106 +1,133 @@
 ---
 story-id: TB-S03
-phase: 5
+phase: 4
 status: READY_FOR_IMPLEMENTATION
 artifact-type: story
-owner: coder
-parent-epic: EPIC-TB-3 (Backend — Notes CRUD)
-created-by: Story Writer
-trace-from-prd: FR2, FR4
-source-epics-file: epics-and-stories.todo-board.md
+owner: coding-agent
+created: 2026-07-03
 ---
 
-# Story TB-S03 — REST Notes CRUD Endpoints with Tests
+# Story TB-S03 — Notes CRUD API with Automated Tests
 
-As a backend developer, I want full CRUD operations on the notes API so users can create, edit, and delete sticky notes in their Kanban columns.
+## As a frontend developer, I want full CRUD operations on note cards (list by column, create, update, delete), so users can manage sticky notes on the Kanban board.
 
-> **Maps to PRD FR2, FR4 (Notes stored + consistent JSON responses)**  
-> **Maps to Architecture:** ADR-002 (REST contract: `GET/POST/PUT/DELETE /api/notes/*`),  
-  ADR-003-B (notes schema with FK → columns)
+**Maps to**: PRD FR2 (Notes entity), FR4 (REST endpoint contract)  
+**Traces to PRD AC**: AC1 (endpoints work correctly — tested via API harness)  
+**ADR References**: ADR-002 (RESTful API contract, response schemas, RFC 7807 errors), ADR-004 (handler/store separation in `internal/http/` and `internal/store/`)
 
-## Context
+## Background / Context
 
-After columns exist, the notes API provides full CRUD. Notes are scoped to a column via `column_id` FK. The store layer uses prepared statements; UUIDs generated in Go. Every response follows RFC 7807 Problem Details for errors.
+PRD FR2 requires notes with: unique ID, column reference, title, body text, timestamps. Notes are created/edited/deleted within a specific column context.
 
-**HTTP contract:**
-| Method | Path | Success | Errors |
-|--------|------|---------|--------|
-| GET | `/api/notes/?column_id=UUID` | `[Note]` (200) | 500 on DB |
-| POST | `/api/notes/` | `{Note}` (201) | 400 bad input, 404 if column doesn't exist |
-| PUT | `/api/notes/:id` | `{Note}` (200) | 404, 400 |
-| DELETE | `/api/notes/:id` | empty (204) | 404 |
+**Endpoints** (from ADR-002 table):
+| Method | Path | Status | Response Body |
+|--------|------|--------|---------------|
+| GET | `/api/notes/?column_id=:id` | 200 | `[Note]` (filtered or all) |
+| POST | `/api/notes/` | 201 | `{Note}` just created |
+| PUT | `/api/notes/:id` | 200 | `{Note}` updated |
+| DELETE | `/api/notes/:id` | 204 | `{"deleted": true}` |
 
-**Go struct:**
-```go
-type Note struct {
-    ID        uuid.UUID `json:"id"`
-    ColumnID  uuid.UUID `json:"column_id"`
-    Title     string    `json:"title"`
-    Body      *string   `json:"body,omitempty"` // nullable → omitted if nil
-    CreatedAt time.Time `json:"created_at"`
-    UpdatedAt time.Time `json:"updated_at"`
-}
-```
+**Note schema**: id (UUID), column_id (FK → columns.id), title (string), body (text nullable), created_at, updated_at.
 
 ## Acceptance Criteria (Given/When/Then)
 
-### AC1: GET /api/notes/?column_id=UUID returns filtered notes or all
+### AC1: `GET /api/notes/?column_id=:id` returns filtered notes array; works without filter
 
-**Given:** the database has column "col-A" with 3 notes, and column "col-B" with 2 notes  
-**When:** `GET /api/notes/?column_id=<col-A-id>` is sent  
-**Then:** response status is 200, body is a JSON array of exactly 3 note objects, each with matching `column_id`  
+**Given** the database has notes in multiple columns  
+**When** a client sends `GET /api/notes/?column_id=<column-uuid>`  
+**THEN**:
+- The response status is 200 OK with `Content-Type: application/json`
+- The body contains ONLY notes where `column_id` equals the requested UUID
+- Each note object has fields: `{id, column_id, title, body?, created_at, updated_at}`
 
-**Given:** no `column_id` query parameter  
-**When:** `GET /api/notes/` is sent  
-**Then:** response is 200, body contains ALL notes from all columns
+**Scenario 1.1: No filter parameter**
+- **Given** notes exist in at least one column  
+- **When** `GET /api/notes/` is sent (no query params)  
+- **THEN** all notes across ALL columns are returned
 
-### AC2: POST /api/notes/ creates a note and returns 201
+**Scenario 1.2: Empty column results**
+- **Given** a column exists that has zero notes  
+- **When** `GET /api/notes/?column_id=<that-column-id>`  
+- **THEN** response body is `[]` (empty array, not null)
 
-**Given:** column "col-A" exists  
-**When:** `POST /api/notes/` with body `{"column_id":"<col-A-id>","title":"Hello World","body":"some details"}` is sent  
-**Then:** response status is 201, body contains the new note object with a valid UUID v4 id, matching column_id, title "Hello World", and non-empty created_at/updated_at timestamps  
-**And:** `SELECT count(*)` in the notes table has increased by 1
+### AC2: `POST /api/notes/` creates a note and returns 201 + full object
 
-### AC3: PUT /api/notes/:id updates or returns 404
+**Given** at least one column exists in the database  
+**When** a client sends `POST /api/notes/` with body `{"title": "Task A", "body": "Do this first", "columnId": "<valid-column-id>"}`  
+**THEN**:
+- The response status is 201 Created
+- The response body contains the full note object: `{id (UUID), column_id ("<valid-column-id>"), title, body, created_at, updated_at}`
+- The note EXISTS in the database and `GET /api/notes/?column_id=<that-id>` returns it
 
-**Given:** note "note-1" exists with title="Old"  
-**When:** `PUT /api/notes/note-1` with body `{"title":"Updated","body":"new body"}` is sent  
-**Then:** response status is 200, body shows the updated note (title="Updated", body="new body"), and `updated_at > created_at`  
+**Scenario 2.1: Invalid columnId (does not exist)**
+- **Given** a valid column exists  
+- **When** `POST /api/notes/` is sent with `"columnId": "<nonexistent-uuid>"`  
+- **THEN** the response status is 400 Bad Request (`invalid column_id`)
 
-**Given:** UUID "00000000-0000-0000-0000-000000000001" does not exist  
-**When:** `PUT /api/notes/<that-id>` is sent  
-**Then:** response is 404 with RFC 7807 body `{"type":"about:blank","status":404,...}`
+**Scenario 2.2: Missing title field**
+- **Given** a valid column exists  
+- **When** `POST /api/notes/` is sent with `{}`  
+- **THEN** the response status is 400 Bad Request (`title is required`)
 
-### AC4: DELETE /api/notes/:id removes and returns 204 or 404
+### AC3: `PUT /api/notes/:id` updates title/body; returns 404 if note not found
 
-**Given:** note "note-1" exists  
-**When:** `DELETE /api/notes/note-1` is sent  
-**Then:** response status is 204 (empty body), and row count for that UUID in the notes table is now 0  
+**Given** a note exists in the database created by Story TB-S03's own setup code (or prior tests)  
+**When** a client sends `PUT /api/notes/<note-id>` with body `{"title": "Updated Title", "body": "Updated body text"}`  
+**THEN**:
+- The response status is 200 OK
+- The note's title and body are updated to the new values
+- The `updated_at` timestamp has changed
 
-**Given:** UUID "00000000-..." does not exist  
-**When:** `DELETE /api/notes/<that-id>` is sent  
-**Then:** response is 404 with RFC 7807 body
+**Scenario 3.1: Partial update (only title)**
+- **Given** a note exists with an existing body  
+- **When** `PUT /api/notes/<note-id>` sends `{"title": "New Title Only"}`  
+- **THEN** the title is updated, the body remains its previous value unchanged
 
-### AC5: API tests exercise every endpoint + edge cases
+**Scenario 3.2: Note not found**
+- **Given** no note matches id `<nonexistent-uuid>`  
+- **When** `PUT /api/notes/<nonexistent-uuid>` is sent  
+- **THEN** response status is 404 with RFC 7807 error (`note not found`)
 
-**Given:** a running backend (SQLite in-memory during test)  
-**When:** `go test ./...` runs inside `backend/`  
-**Then:** all 4 endpoints pass positive, negative, and input-validation paths  
-**And:** no errors or panics occur  
+### AC4: `DELETE /api/notes/:id` removes note and returns 204
 
-## Implementation Notes
+**Given** a note exists in the database  
+**When** a client sends `DELETE /api/notes/<note-id>`  
+**THEN**:
+- The response status is 204 No Content (or 200 with `{"deleted": true}`)
+- The note NO LONGER appears in any `GET /api/notes/` query
 
-- Handler: `internal/http/note_handler.go` — parse UUIDs via `uuid.Parse()`, return 400 if invalid.
-- Store: `internal/store/notes.go` — functions `ListByColumn`, `Create`, `Update`, `Delete`.
-- Validation: title ≥1 char, ≤255 chars; column_id must reference existing column (check before INSERT; return 404 or 400? → ADR-002 says POST /api/notes on bad input returns 400. I recommend **403** since `column_id` being invalid is an input validation error).
-- Tests: place in `backend/internal/store/note_test.go` using the SQLite-in-memory helper pattern (shared across TB-S02 and TB-DnD) with `t.Cleanup()` for teardown, or use `go test -v ./...`.
+**Scenario 4.1: Note not found**
+- **Given** no note matches `<nonexistent-uuid>`  
+- **When** `DELETE /api/notes/<nonexistent-uuid>` is sent  
+- **THEN** response status is 404 (`note not found`)
+
+### AC5: All note endpoints have automated API tests covering every scenario
+
+**Given** the application is running with backend + sqlite  
+**When** the CI test harness runs `tests/note_api_test.sh` or equivalent  
+**THEN**:
+- Tests verify GET with and without column_id filter → status 200
+- Tests verify POST with/create notes, invalid columnId → 201/400
+- Tests verify PUT (full + partial update) → 200
+- Tests verify DELETE → 204 + verify gone on subsequent GET
+- All test scenarios pass (exit code 0)
+
+## Technical Implementation Notes
+
+- The store layer method `GetNotesByColumnID(columnUUID)` returns `[]Note{}` for empty results
+- POST body must validate existence of the referenced column before inserting (FK constraint, but also application-level validation for better error messages)
+- Parameterized queries throughout — use `sql.Stmt` or equivalent Go prepared statements
+
+## Output / Deliverables
+
+1. CRUD handlers in `internal/http/handler.go` (4 more endpoints)
+2. Store methods in `internal/store/note_store.go`
+3. Automated API tests for all note scenarios
+
+## Dependencies: TB-S01 (migrations + DB runner), TB-S02 (columns must exist to reference notes)
+
+## Estimate: S
 
 ---
 
-## Dependencies
-
-**Requires:** TB-S01 (columns + notes tables + DB schema), TB-S02 (at least one column exists for testing FK constraint)
-
-## Estimate
-
-S (2–3 hours for a Go developer who knows `database/sql`)
+*Written by Story Writer — traces to PRD FR2/FR4/AC1, Architecture ADR-002/ADR-003-B*

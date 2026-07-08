@@ -1,102 +1,121 @@
 ---
 story-id: TB-S06
-phase: 5
+phase: 4
 status: READY_FOR_IMPLEMENTATION
 artifact-type: story
-owner: coder
-parent-epic: EPIC-TB-6
-created-by: Story Writer (John)
-trace-from-prd: FR3, AC2, G1
-source-epics-file: epics-and-stories.todo-board.md
+owner: coding-agent
+created: 2026-07-03
 ---
 
-# Story TB-S06 — Drag-and-Drop, Edit & Delete Notes in UI
+# Story TB-S06 — Drag-and-Drop Notes Between Columns, Inline Edit & Delete
 
-As a user, I want to drag note cards between columns, click to edit them, and delete stale items so my board reflects reality.
+## As a user, I want to drag note cards between columns, click cards to edit title/body inline, and delete stale notes, so my board reflects real-time task management.
 
-> **Maps to PRD AC2, G1, FR3**  
-> **Maps to Architecture:** ADR-001 (vanilla HTML/CSS/JS frontend — NO dnd-kit dependency per ADR-001 principle of boring tech)  
-> **Previous Epic Story:** "Drag-and-drop notes between columns; edit and delete notes in UI"
+**Maps to**: PRD FR6 (Frontend: draggable cards, drag-and-drop, edit/delete via UI), AC3 (all create/move/delete actions in UI successfully update data)  
+**Traces to PRD AC**: AC3 (all UI actions call API — no mock/static data), G2 (tested via automated + browser verification)  
+**ADR References**: ADR-001 (vanilla HTML/CSS/JS + CDN dnd-kit for drag-and-drop), ADR-002 (move and delete endpoint contracts)
 
----
+## Background / Context
 
-## Context
+Per the PRD: "Use `dnd-kit` or equivalent mature library. Do not roll custom DnD logic." We'll use dnd-kit via CDN (UMD build) — no npm build step required.
 
-This story adds three critical Kanban board interactions to the vanilla JS frontend:
-
-1. **Dragging** note cards between columns via native HTML5 Drag-and-Drop API (not dnd-kit — ADR-001 says "boring tech," vanilla DnD is fine for this demo scale).
-2. **Inline edit** of note title/body when clicking a card.
-3. **Delete with confirmation** before removing a note.
-
----
+The frontend already renders cards (TB-S05). This story adds:
+1. **Drag-and-drop** notes between columns using dnd-kit's `useDroppable` and `useSortable`
+2. **Inline edit**: clicking a card opens an inline editor with title/body fields; save → `PUT /api/notes/:id`
+3. **Delete**: an "X" button on each card confirms deletion via `DELETE /api/notes/:id`
 
 ## Acceptance Criteria (Given/When/Then)
 
-### AC1: Note cards are draggable between columns using native HTML5 DnD
+### AC1: Note cards are draggable between columns (using dnd-kit or equivalent library)
 
-**Given** the board is loaded and displaying multiple columns with notes  
-**WHEN** the user clicks and holds a note card in column `col-A`
-**AND**: drags it to column `col-B`'s drop area  
-**THEN**: at least during drag, the dragged card visually follows the cursor (drag image visible)
-**AND**: the drop target column highlights with a visual highlight (`border: 3px solid #4CAF50; background-color: rgba(76,175,80,0.1)` to indicate valid drop zone)
+**Given** the board is loaded with notes in at least one column  
+**When** a user clicks and holds on any note card, then drags it to a different column  
+**THEN**:
+- During the drag, the card becomes semi-transparent or visually highlighted
+- When released (dropped) into a valid column's area, the drop zone highlights (e.g., background color change)
+- The `column_id` in the database is updated via `POST /api/notes/<note-id>/move` with the new column's UUID
+- After the API call succeeds (200), the card visually appears in the new column
 
-### AC2: Visual highlight indicates valid drop zones during drag
+### AC2: During drag operations, visual feedback indicates valid drop zones
 
 **Given** a user is dragging a note card  
-**WHEN** the dragged card hovers over a non-empty column  
-**THEN**: that column's border highlights green with background tint
-**AND**: when it hovers over an invalid area (outside any column) the highlights disappear
+**When** the card hovers over a different column area  
+**THEN**:
+- The target column highlights with a distinct background color (e.g., light blue) to indicate it accepts drops
+- The original source column shows the dragged card removed from its visual position (ghost placeholder or gap)
 
-### AC3: On drop in a different column, frontend fires POST /api/notes/:id/move with new columnId
+### AC3: Dropping into a different column fires `POST /api/notes/:id/move`
 
-**Given** a note `note-1` currently belongs to column `col-A`  
-**WHEN** the user drags `note-1` to column `col-B` and releases (drops)
-**THEN**: a `POST /api/notes/note-1/move` request is sent with body `{"column_id":"<col-B-uuid>"}`
-**AND**: if the response is 200, the board re-renders showing `note-1` now inside `col-B`
-**AND**: if the response is 4xx/5xx, a toast notification appears "Could not move note — try again"
+**Given** a note card is being dragged from column A  
+**When** the user drops it on column B  
+**THEN**:
+A `POST` request is sent to `/api/notes/<note-id>/move` with body `{"columnId": "<column-B-UUID>"}` (not a mock call; the actual API endpoint)
 
-### AC4: Clicking a card opens inline edit form for title/body; save posts to PUT /api/notes/:id
+**Scenario 3.1: Drop succeeds**
+- **Given** `POST /api/notes/:id/move` returns 200  
+- **THEN** the note's DOM element moves to column B
 
-**Given** a note `note-1` exists on the board  
-**WHEN** the user clicks once (not drag) on the note card
-**THEN**: an inline edit form replaces the card in-place with editable fields for:
- - Title input (prefilled with current title)
- - Body textarea (prefilled with current body, or empty if null)
- - A "Save" button and a "Cancel" button
-**WHEN** the user edits both fields and clicks "Save"
-**THEN**: a `PUT /api/notes/note-1` request is sent with the updated title and body
-**AND**: on 200 response, the card re-renders with the new values displayed
+**Scenario 3.2: Drop fails (API error)**
+- **Given** `POST /api/notes/:id/move` returns an error (e.g., network failure)  
+- **THEN** the card visually reverts back to its original position in column A and a brief toast or inline message indicates the move failed
 
-### AC5: Edit button shows confirmation dialog that posts to DELETE /api/notes/:id
+### AC4: Clicking a card opens an inline editor; save posts to `PUT /api/notes/:id`
 
-**Given** a note `note-1` exists on the board  
-**WHEN** the user clicks the "🗑️" delete button on the note card
-**THEN**: a browser confirm() dialog appears with message: "Delete this note?"
-**AND**: if the user clicks "Cancel", no request is sent and the note remains visible
-**AND**: if the user clicks "OK", a `DELETE /api/notes/note-1` request is sent
-**AND**: on 204 response, the card is removed from the UI immediately without a full page reload
-**AND**: if the response is 4xx/5xx, an inline error message appears ("Could not delete — try again")
+**Given** a note card is displayed on the board  
+**When** a user double-clicks (or clicks edit button) on that card  
+**THEN**:
+- The card transforms into an inline edit form with two text fields: `title` and `body`
+- Current values from `GET /api/notes/:id` are pre-filled in both fields
+
+**Scenario 4.1: Save edits**
+- **Given** the inline editor shows the note's current data  
+- **When** the user modifies title/body and clicks "Save"  
+- **THEN**:
+  - A `PUT /api/notes/<note-id>` request is sent with the new values
+  - Upon HTTP 200, the card renders back as a regular note display showing updated content
+  - The card's `updated_at` timestamp in the database is refreshed
+
+**Scenario 4.2: Cancel edits (X button on editor)**
+- **Given** the inline editor is open  
+- **When** the user clicks "Cancel" or presses Escape  
+- **THEN** the card returns to its normal display view without saving changes
+
+### AC5: Delete shows confirmation dialog; posts `DELETE /api/notes/:id`
+
+**Given** a note card is displayed on the board  
+**When** a user clicks an "X" (delete) icon/button visible on the card  
+**THEN**:
+- A confirm() JavaScript dialog appears with text like `"Delete this note?"`
+
+**Scenario 5.1: User confirms deletion**
+- **Given** the confirm dialog is shown and the user clicks "OK"  
+- **When** `DELETE /api/notes/<note-id>` succeeds (204)  
+- **THEN**:
+  - The card is removed from the DOM immediately
+  - A subsequent `GET /api/notes/?column_id=<that-column>` does not return this note
+
+**Scenario 5.2: User cancels deletion**
+- **Given** the confirm dialog is shown and the user clicks "Cancel"  
+- **THEN** nothing changes — the card remains visible in its column
+
+## Technical Implementation Notes
+
+- Use dnd-kit via CDN `<script src="https://unpkg.com/@dnd-kit/core/dist/index.js">` (UMD) or importmap-style ES module from CDN
+- In `app.js`: after rendering notes (from TB-S05), iterate over the note cards and:
+  - Make them sortable via dnd-kit's `SortableContext` + `useSortable` hooks
+  - Add click-to-edit handler that swaps the card div for an `<form>` DOM structure
+  - Add a delete button with `confirm()` wrapper before calling `fetch('/api/notes/' + id, { method: 'DELETE' })`
+- No external CSS frameworks — all dnd-kit visual state classes are added manually (`.dnd-dragging`, `.dnd-over` etc. via the library)
+
+## Output / Deliverables
+
+1. Updated `frontend/app.js` with: dnd-kit drag-and-drop init, inline editor logic, delete confirmation & API call
+2. If needed, additional CSS for dnd-kit visual states in `frontend/styles.css` (.card.dragging, .column.drop-hover etc.)
+
+## Dependencies: TB-S05 (board rendering must be complete; cards must exist to be draggable)
+
+## Estimate: M
 
 ---
 
-## Implementation Notes
-
-- Use native HTML5 DnD API: `draggable="true"`, event listeners for `dragstart`, `dragover`, `drop`, `dragend`.
-- In `app.js`, add functions:
-  - `setupDragDrop(cardEl, columnUUID)` — attaches dragend handler.
-  - `openInlineEdit(noteId, currentTitle, currentBody)` — mutates DOM to show edit form.
-  - `showDeleteConfirm(noteId)` — calls `confirm()` and handles the async result.
-- Prevent text selection during drag: add `user-select: none` to cards during dragstart.
-- Keep visual feedback snappy: animations ≤200ms (CSS transitions).
-- The column highlight class should toggle on `dragover`/`dragleave`, not continuously — only change state on actual enter/exit of the drop zone element.
-
----
-
-## Dependencies
-
-Requires: **TB-S05** (board must exist and display cards), **TB-S01-TB-S04** (backend endpoints)  
-Must be implemented after board rendering story because cards don't exist without it.
-
-## Estimate
-
-M (3–5 hours for frontend developer with strong CSS/DnD experience)
+*Written by Story Writer — traces to PRD FR6/AC3/G2, Architecture ADR-001*

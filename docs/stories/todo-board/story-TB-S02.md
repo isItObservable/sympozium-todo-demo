@@ -1,128 +1,130 @@
 ---
 story-id: TB-S02
-phase: 5
+phase: 4
 status: READY_FOR_IMPLEMENTATION
 artifact-type: story
-owner: coder
-parent-epic: EPIC-TB-2
-created-by: Story Writer (John)
-trace-from-prd: FR1, FR4, AC1
-source-epics-file: epics-and-stories.todo-board.md
+owner: coding-agent
+created: 2026-07-03
 ---
 
-# Story TB-S02 — REST Columns CRUD Endpoints with Tests
+# Story TB-S02 — Columns CRUD API with Automated Tests
 
-As a backend developer, I want full CRUD operations on the columns API so the Kanban frontend can display lanes and users can manage them.
+## As a frontend developer, I want complete REST CRUD operations for columns (list, create, update, delete), so the Kanban board can display and manage Kanban lanes programmatically.
 
-> **Maps to PRD FR1, FR4**  
-> **Maps to Architecture:** ADR-002 (REST contract), ADR-003 (database layer)  
-> **Previous Epic Story:** "REST columns endpoints with tests"
+**Maps to**: PRD FR1 (Columns structure), FR4 (REST endpoint contract)  
+**Traces to PRD AC**: AC1 (endpoints with correct HTTP methods/status codes)  
+**ADR References**: ADR-002 (RESTful API contract, RFC 7807 errors), ADR-004 (project structure: `internal/http/handler.go`, `internal/store/`)
 
----
+## Background / Context
 
-## Context
+PRD FR1 requires multiple columns (at minimum "To Do", "Doing", "Done") that users can create, rename, and delete. The API contract in ADR-002 defines the exact HTTP methods, paths, and response schemas.
 
-After database tables exist (TB-S01), the HTTP handlers layer exposes CRUD for `columns`. All responses use RFC 7807 Problem Details format for errors. The store layer uses `database/sql` with prepared statements to prevent SQL injection. UUIDs are generated server-side via `crypto/rand`.
+**Endpoints**:
+| Method | Path | Status | Response Body |
+|--------|------|--------|---------------|
+| GET | `/api/columns/` | 200 | `[Column]` JSON array |
+| POST | `/api/columns/` | 201 | `{Column}` created column |
+| PUT | `/api/columns/:id` | 200 | `{Column}` updated column |
+| DELETE | `/api/columns/:id` | 204 | Body: `{"deleted": true}` (or empty) |
 
-**HTTP contract from ADR-002:**
-
-| Method | Path | Success Response | Error Responses |
-|--------|------|------------------|-----------------|
-| GET | `/api/columns/` | `[Column]` (200) | 500 on DB error |
-| POST | `/api/columns/` | `{Column}` (201) | 400 bad input, 500 |
-| PUT | `/api/columns/:id` | `{Column}` (200) | 404, 400 |
-| DELETE | `/api/columns/:id` | `{"deleted": true}` (204) | 404 |
-
-**Column struct:**
-```go
-type Column struct {
-    ID         uuid.UUID `json:"id"`
-    BoardScope string    `json:"board_scope"`
-    Title      string    `json:"title"`
-    CreatedAt  time.Time `json:"created_at"`
-    UpdatedAt  time.Time `json:"updated_at"`
-}
-```
-
-**Error format (RFC 7807):**
-```json
-{"type":"about:blank","status":400,"title":"Bad Request","detail":"message","instance":"/api/columns/"}
-```
-
----
+**Error handling**: RFC 7807 Problem Details for all errors.
 
 ## Acceptance Criteria (Given/When/Then)
 
-### AC1: GET /api/columns/ returns JSON array of columns
+### AC1: `GET /api/columns/` returns a JSON array of column objects
 
-**Given** the database contains N column records (N ≥ 0)  
+**Given** the database has been initialized with at least one column  
 **When** a client sends `GET /api/columns/`  
-**THEN** the response HTTP status is 200  
-**AND** the response `Content-Type` header is `application/json`  
-**AND** the body is a valid JSON array where each element contains keys: `id`, `board_scope`, `title`, `created_at`, `updated_at`  
-**AND** timestamps are in RFC 3339 format (e.g., `"2024-01-15T10:30:00Z"`)
+**THEN**:
+- The response status is 200 OK
+- The `Content-Type` header is `application/json`
+- The body is a JSON array where each element has: `{id: string (UUID), board_scope: string, title: string, created_at: string (ISO8601), updated_at: string (ISO8601)}`
 
-### AC2: POST /api/columns/ creates a column and returns 201
+**Scenario 1.1: Empty database**
+- **Given** zero columns in the database  
+- **When** `GET /api/columns/` is called  
+- **THEN** the response body is `[]` (empty array, not null)
 
-**Given** the columns table is empty  
-**When** a client sends `POST /api/columns/` with body `{"board_scope":"default","title":"To Do"}`  
-**THEN** the response HTTP status is 201  
-**AND** the response body contains a new column object with:
- - `id` set to a valid UUID v4 (follows RFC 4122 format)
- - `board_scope` = "default"
- - `title` = "To Do"
- - `created_at` and `updated_at` identical at creation time (both are current server timestamp)
-**AND** a subsequent `GET /api/columns/` returns this new object in the array
+### AC2: `POST /api/columns/` creates a column and returns 201 + the created object
 
-### AC3: PUT /api/columns/:id updates title; returns 404 if not found
+**Given** no columns or existing columns in the database  
+**When** a client sends `POST /api/columns/` with body `{"title": "New Column"}` (valid JSON)  
+**THEN**:
+- The response status is 201 Created
+- The response body contains `{id: string (non-empty UUID), title: "New Column", board_scope: "default", created_at, updated_at}`
+- The column EXISTS in the database and can be retrieved by `GET /api/columns/`
+- `board_scope` defaults to `"default"` if not provided
 
-**Given** a column exists with `id = "a1b2c3d4-..."` and `title = "Old"`  
-**When** a client sends `PUT /api/columns/a1b2c3d4-...` with body `{"title":"Updated"}`  
-**THEN** the response HTTP status is 200
-**AND** the response body contains the updated column with `title = "Updated"`
-**AND** the `updated_at` timestamp is later than the original `created_at`
+**Scenario 2.1: Missing title**
+- **Given** any columns in the database  
+- **When** `POST /api/columns/` is sent with body `{}` (no title field)  
+- **THEN** the response status is 400 Bad Request with RFC 7807 error (`title is required`)
 
-**Given** a non-existent UUID `"00000000-0000-0000-0000-000000000001"`  
-**When** a client sends `PUT /api/columns/00000000-0000-0000-0000-000000000001` with body `{"title":"X"}`  
-**THEN** the response HTTP status is 404  
-**AND** the body follows RFC 7807 format with `"status":404`
+**Scenario 2.2: Empty string title**
+- **Given** any columns  
+- **When** `POST /api/columns/` is sent with `{"title": ""}`  
+- **THEN** the response status is 400 Bad Request
 
-### AC4: DELETE /api/columns/:id deletes column (cascades to notes) and returns 404 if not found
+### AC3: `PUT /api/columns/:id` updates a column's title; returns 404 if not found
 
-**Given** a column `col1` exists with two associated notes attached  
-**When** a client sends `DELETE /api/columns/col1-uuid`  
-**THEN** the response HTTP status is 204 (empty body)
-**AND** `SELECT * FROM columns WHERE id='col1-uuid'` returns zero rows post-deletion
-**AND** both associated notes rows are also removed from the `notes` table (orphan cascade confirmed)
+**Given** a column exists in the database (e.g., with id `"550e8400-e29b-41d4-a716-446655440000"`)  
+**When** a client sends `PUT /api/columns/550e8400-e29b-41d4-a716-446655440000` with body `{"title": "Updated Title"}`  
+**THEN**:
+- The response status is 200 OK
+- The response body contains the updated column (title is now `"Updated Title"`)
+- The `updated_at` field has changed to the current timestamp
 
-**Given** a non-existent UUID  
-**When** `DELETE /api/columns/00000000-0000-0000-0000-000000000001` is sent  
-**THEN** the response HTTP status is 404 with RFC 7807 body
+**Scenario 3.1: Column not found**
+- **Given** no column exists with id `"nonexistent-uuid"`  
+- **When** `PUT /api/columns/nonexistent-uuid` is sent  
+- **THEN** the response status is 404 Not Found with RFC 7807 error (`column not found`)
 
-### AC5: All endpoints tested with automated API tests
+### AC4: `DELETE /api/columns/:id` deletes a column and cascades to notes; returns 404 if not found
 
-**Given** a running backend server (via `./backend/test-fixtures/mock_server.sh`)  
-**When** the test suite runs (`go test ./...` in `tests/column_api_test.sh`)  
-**THEN** every endpoint is exercised: positive (valid inputs), negative (invalid IDs, missing fields), and cascade-delete verification
-**AND** all 15+ individual assertions pass without errors
+**Given** a column exists in the database  
+**When** a client sends `DELETE /api/columns/<column-id>`  
+**THEN**:
+- The response status is 204 No Content (or 200 with `{"deleted": true}`)
+- The column NO LONGER EXISTS in the database when queried via `GET /api/columns/`
+
+**Scenario 4.1: Cascade to notes**
+- **Given** a column exists AND has 3 associated notes  
+- **When** the column is deleted  
+- **THEN** all 3 notes are also removed from the database (FK cascade ON DELETE CASCADE)
+
+**Scenario 4.2: Column not found**
+- **Given** no column with id `"nonexistent-uuid"`  
+- **When** `DELETE /api/columns/nonexistent-uuid` is sent  
+- **THEN** the response status is 404 Not Found
+
+### AC5: All endpoints have automated API tests covering every scenario
+
+**Given** the application is running locally (backend + sqlite)  
+**When** CI runs the endpoint tests for columns  
+**THEN**:
+- Tests hit `GET /api/columns/` and verify status=200, body-is-array
+- Tests hit `POST /api/columns/` with valid and invalid bodies, verify 201/400 statuses
+- Tests hit `PUT /api/columns/:id` with existing and non-existing ids, verify 200/404
+- Tests hit `DELETE /api/columns/:id` with existing and non-existing ids, verify cascade behavior and 404
+- All tests pass (exit code 0)
+
+## Technical Implementation Notes
+
+- Route registration in `internal/http/handler.go`: register all 4 routes under the `/api/columns/` prefix
+- The store layer should use parameterized queries (prepared statements) — NO string concatenation for SQL
+- UUID generation: generate in Go on `POST` using `crypto/rand`, pass it to the INSERT
+- RFC 7807 errors: implement a helper like `respondProblem(ctx, w, status, typeURI, title, detail)` that serializes the correct JSON
+
+## Output / Deliverables
+
+1. CRUD handler functions in `internal/http/handler.go` (4 handlers)
+2. Store layer methods in `internal/store/column_store.go` (4 queries + 1 cascade)
+3. Automated API tests in `tests/column_api_test.sh` or Go test file: `tests/column_http_test.go`
+
+## Dependencies: TB-S01 (database migrations must be complete and running)
+
+## Estimate: S
 
 ---
 
-## Implementation Notes
-
-- Register routes in `main.go` using Go stdlib `http.HandleFunc` or a simple router wrapper.
-- Parse UUID from the URL path; return 400 if it fails to parse (not 404 — this is input validation).
-- Store layer (`internal/store/columns.go`) contains functions: `ListColumns`, `CreateColumn`, `UpdateColumn`, `DeleteColumn`.
-- Tests can use SQLite in-memory database to avoid external deps. Create `backend/internal/store/columns_test.go` using the test helper.
-- Validate empty/whitespace-only title → return 400 (non-empty input required).
-- Maximum title length: 255 characters (per DB schema); reject inputs longer with 400.
-
----
-
-## Dependencies
-
-Requires: **TB-S01** (database migrations must exist)
-
-## Estimate
-
-S (2–3 hours for Go developer writing handlers + tests)
+*Written by Story Writer — traces to PRD FR1/FR4/AC1, Architecture ADR-002/ADR-003-B*
