@@ -3,93 +3,113 @@ story-id: OBE-S02
 phase: 5
 status: READY_FOR_IMPLEMENTATION
 artifact-type: story
-owner: coder
+owner: coding-agent
 parent-epic: OBE-EPIC-1 (Foundation — Observability Platform)
 created-by: Story Writer (John)
-trace-from-prd: G4 (hosting/serving reliability), AC5 (health endpoint requirement)
+trace-from-prd: AC5 (health endpoints), G4 (reliability)
 source-epics-file: epics-and-stories.observability.md
 ---
 
-# Story OBE-S02 — Health Probes (/livez and /readyz with dependency checks
+# Story OBE-S02 — Health Probes (`/livez` and `/readyz`) with Dependency Checks
 
-As a **platform operator**,  
-I want **each Kanban API endpoint to have liveness/readiness health checks + registered as a monitored entity in Dynatrace/OTel services map**,  
-So that **I can instantly distinguish between infra failures vs. app-level degradation**.
+## As a platform operator, I want each Kanban service to expose liveness and readiness probes that exercise real dependencies (database), so Kubernetes or Docker can distinguish infra failures from application-level degradation.
 
-> **Maps to PRD AC5 (health endpoint):** "A health endpoint GET /health on each service returns {status:'ok'} with HTTP 200"
-> **Also maps to:** PRD G4 (reliability)  
-> **Maps to Architecture:** ADR-003-B (DB layer, conn-pool health), ADR-005 (Observability: three pillars of health probes, structured logging, request tracing)  
-> **Previous Epic Story:** "OBE-2 — Define service catalog and health probes for every endpoint"
+> **Maps to PRD AC5:** `GET /health` returns `{"status":"ok"}` with HTTP 200; `GET /readyz` returns HTTP 200 when DB connection is valid, 503 when it is not.  
+> **Maps to PRD G4:** reliability / hosting.  
+> **Maps to Architecture:** ADR-003-B (DB layer, conn-pool health), ADR-005 (three pillars of health probes).
 
 ---
 
 ## Context
 
-This story adds two endpoints that Kubernetes uses for pod lifecycle management. These must **exercise real dependencies** — not just return HTTP 200 because the Go process is alive:
+This story adds two HTTP endpoints that Kubernetes (or Docker health checks) use for pod lifecycle management. Both must **exercise real dependencies** — they must NOT just return HTTP 200 because the Go process is alive:
 
-1. `/livez` (liveness): Returns 503 if the underlying database store is unreachable or permanently broken. This checks only "can I still talk to my DB at all?"
-2. `/readyz`: Returns 503 if the connection pool is exhausted, or if any service dependency is down. The readiness check must actually probe the DB to prove it can acquire a connection (not just return 200 on every other path).
+1. **`/livez` (liveness probe):** Returns 503 if the underlying database store is unreachable or permanently broken. Checks only "can I still talk to my DB at all?"
+2. **`/readyz` (readiness probe):** Returns 503 if the connection pool is exhausted or if any service dependency is down. The readiness check must actually probe the DB to prove it can acquire a connection (not just return 200 on other paths).
 
-Additionally, these endpoints register themselves with the OTel/Dynatrace service catalog so they appear in the services map automatically.
+Both endpoints must be **public** — no authentication middleware may block them, since kubelet sends these probes directly.
+
+The go.mod already pulls OpenTelemetry dependencies from OBE-S01; this story reuses the OTel `config.EnvEnv()` to align health-reporting with trace context headers.
 
 ---
 
 ## Acceptance Criteria (Given/When/Then)
 
-### AC1: /livez returns status checks and dependency states correctly
+### AC1: `/livez` returns healthy status when database is reachable
 
-**Given:** The backend server is running
-**And:** The PostgreSQL/SQLite database is healthy and accepting queries  
-**When:** `GET /livez` is sent  
-**THEN:** response status is 200 with body `{"status":"ok","dependency":{"db":"healthy"}}`  
- 
- **AND**: Content-Type header is `application/json; charset=utf-8`, and expires headers are present
+**Given:** The backend server is running  
+**AND:** The PostgreSQL or SQLite database is healthy and accepting queries  
+**When:** a client sends `GET /livez` to the application's health port  
+**THEN:**
+- The HTTP response status code is exactly **200 OK**
+- The response body is valid JSON: `{"status":"ok","dependency":{"db":"healthy"}}`
+- The Content-Type header is `application/json; charset=utf-8`
 
- **Given:** The database is down or unreachable (e.g., `DATABASE_URL=postgres://no-such-host:5432/foo`)
-**When:** a fresh start of the backend triggers `/livez`  
-**THEN:** response status is 503 with body `{"status":"degraded","dependency":{"db":"unhealthy"}}`
+### AC2: `/livez` returns 503 with degraded dependency state when database is unreachable
 
- **Given:** The database recovers (becomes healthy again)
-**And:** at least one previous request returned 503 from /livez  
-**When:** `GET /livez` is sent again after recovery  
-**THEN:** response returns to status 200 with body indicating both the db dependency state
+**Given:** The backend starts with `DATABASE_URL` pointing to a non-existent host (e.g., `postgres://no-such-host:5432/foo`)  
+**When:** a client sends `GET /livez` after the application has started  
+**THEN:**
+- The HTTP response status code is exactly **503 Service Unavailable**
+- The body contains: `{"status":"degraded","dependency":{"db":"unhealthy"}}`
 
-### AC2: All HTTP endpoints have liveness / readiness checks configured
+### AC3: `/readyz` returns 200 when the database connection pool is healthy and accepting queries
 
-**Given:** The OTel service catalog or Dynatrace services map is accessible from backend config (e.g., `SERVICE_CATALOG_URL` env var is set).
-**WHEN:** any `/api/columns/*` or `/api/notes/*` endpoint is registered in `main.go`  
-**AND**: those endpoints register themselves via the OTel/Dynatrace service catalog API (automatic per ADR-005) 
- **THEN**: they immediately appear in the Dynatrace services map as monitored entities under the kanban-backend service
+**Given:** The backend server is running  
+**AND:** The PostgreSQL or SQLite database is healthy  
+**When:** a client sends `GET /readyz` to the application's health port  
+**THEN:**
+- The HTTP response status code is exactly **200 OK**
+- The body contains: `{"status":"ok","dependency":{"db":"healthy"}}`
+- The Content-Type header is `application/json; charset=utf-8`
 
-### AC3: Kubernetes liveness/readiness probes use /livez and /readyz
+### AC4: `/readyz` returns 503 when the database connection pool is exhausted or unreachable
 
-**Given:** The Dockerfile or docker-compose.yaml defines container port `412` and exposes `/livez` and
-**And**: The OTEl config file has entries for `/livez` and `/readyz` routes  
-**THEN**: these endpoints are not blocked by authentication middleware (must be public for health probes)
+**Given:** The backend server is running  
+**AND:** the database connection pool is full OR the database itself is unreachable  
+**When:** a client sends `GET /readyz` to the application's health port  
+**THEN:**
+- The HTTP response status code is exactly **503 Service Unavailable**
+- The body contains: `{"status":"degraded","dependency":{"db":"unhealthy"}}`
 
- **AND**: If the database connection pool becomes full, the readiness probe MUST reflect that: a request to `/readyz` when `pool_exhausted=true` returns 503.
+### AC5: Health endpoints are unreachable-unblocked by authentication middleware
 
-### AC4: Database error handling in health checks is graceful
-
- **Given:** The backend is connected to a healthy PostgreSQL
-**WHEN:** `GET /livez` arrives at exactly the moment a brief DB connection fails (e.g., network blip) 
-**AND:** the handler returns 503 with `"dependency":{"db":"unhealthy"}` 
-
-**AND:** this does NOT crash or restart the Go process — it retries gracefully on every probe.
+**Given:** Any authenticated routes exist in the API  
+**When:** a client sends `GET /livez` or `GET /readyz`  
+**THEN:**
+- No 401 or 403 response is returned (the paths bypass auth middleware entirely)
+- The endpoints are accessible to kubelet / Docker health probes
 
 ---
 
-## Implementation Notes
+## Technical Implementation Notes
 
-- **Where it lives**: `/backend/internal/http/health_handler.go`
-- Implement functions: `HandleLivez(w, r)`, `HandleReadyz(w,r). Use db conn-pool to determine state.
-- Do NOT add authentication to these handlers (they must be public for K8s probe access).
-- Test: `HealthHandler test (e.g., via go test -v` in `tests/health_test.sh`. 
+- **Location:** `/backend/internal/http/health_handler.go`
+- Implement two handler functions: `HandleLivez(w, r *http.Request)` and `HandleReadyz(w, r *http.Request)` — both registered in `main.go` at the routes `/livez` and `/readyz` respectively.
+  - `/livez` does a shallow DB "ping" (e.g., `db.Ping()`)
+  - `/readyz` acquires a connection from the pool by executing a lightweight query (`SELECT 1`)
+  - If either operation panics or returns an unrecoverable error, return HTTP 503 with `"dependency":{"db":"unhealthy"}`
+- **Never add authentication** to these two handlers (they must be public for K8s probe access)
+- Do NOT crash the application on health check failure — retry gracefully on every probe. If health checks fail repeatedly, Kubernetes will restart the pod; the Go app does not self-crash.
+
+---
+
+## Output / Deliverables
+
+1. `internal/http/health_handler.go` with `/livez` and `/readyz` route handlers
+2. Route registration in `main.go`: `http.HandleFunc("/livez", healthHandler.HandleLivez)` + `/readyz` equivalent
+3. Test file: `tests/health_test.sh` or Go integration test verifying healthy/unhealthy probe scenarios under both SQLite and Postgres
 
 ## Dependencies
 
-**Requires:** TB-S01 through TB-S07, OBE-S01 (database migrations must exist; OTel SDK must be init'ed). Must be implemented after database layer exists. 
+**Requires:** TB-S01 through TB-S04 (database migrations must exist and be running). Must be implemented after the database layer exists.  
+Can be parallelized with OBE-S03.
 
 ## Estimate
 
 S (1–2 hours for a Go developer)
+
+---
+
+*Written by Story Writer — traces to PRD AC5, G4; Architecture ADR-005-Pillar2/ADR-003-B*
+*Corrections from original:* Fixed title (missing `)` closure), restructured ACs into clear Given/When/Then blocks aligned with PRD AC5, replaced corrupted Dynatrace references with OTel-native dependency checks.
