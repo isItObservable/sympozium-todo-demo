@@ -254,3 +254,196 @@ DB schema migration ──────────────────► OB
 
 *Produced by Winston (Architect, BMAD Phase 3). Ready for handoff to Story Writer → Coding → Code Review.*
 *See PR #13 for the full architecture artifact.*
+
+---
+
+### ADR-008: Initial Seed Data — Three Default Columns (Required by AC1)
+**Status**: Accepted
+
+The PRD AC1 states: *"User opens browser at http://localhost, sees a Kanban board with three default columns."*
+
+This is NOT covered by migration v1 alone. Migrations create the schema; seed data creates the initial board state.
+
+#### Decision: Seed on first migration run + API fallback
+Both code paths are required:
+
+**Path A — Migration-level seed (v2):**
+```sql
+INSERT INTO columns (id, title, board_scope) VALUES
+    ('00000000-0000-0000-0000-000000000101', 'To Do', 'default'),
+    ('00000000-0000-0000-0000-000000000102', 'Doing', 'default'),
+    ('00000000-0000-0000-0000-000000000103', 'Done', 'default')
+ON CONFLICT DO NOTHING;
+```
+
+**Path B — Application-level seed (first-start):** If the columns table is empty after migration, the Go application MUST auto-seed the three default columns using `crypto/rand`-generated UUIDs. This covers edge cases (migration skipped, DB dropped between runs).
+
+#### Rationale:
+- AC1 requires visible board state on first load — empty board fails AC1 visually
+- Migration seed is clean and reproducible; app-level seed is a safety net. If both run, the `ON CONFLICT DO NOTHING` in migration prevents duplicate seeds.
+- Seed ID generation: Use deterministic UUIDs (path A) for migration, `crypto/rand` (path B) for application seed. Never generate random IDs at runtime in migrations — they break reproducibility.
+
+---
+
+### ADR-009: Health Endpoint Naming — Standardize on K8s Probes (/livez, /readyz)
+**Status**: Accepted
+
+**Conflicting conventions in current artifacts:**
+- PRD AC5: `/health` and `/readyz` (inconsistent naming)
+- OBE-S02: `/livez` and `/readyz` (Kubernetes convention)
+- ADR-002: `/health` with DB check (wrong for liveness — Kubernetes anti-pattern to tie liveness to dependencies)
+
+#### Decision: Three distinct endpoints
+| Endpoint | Semantic Meaning | Status on Dep Down | K8s Probe Usage |
+|----------|-----------------|-------------------|------------------|
+| `/livez` | Application process is alive (no DB check) | 200 always (unless OOMKilled, etc.) | Liveness probe (`failureThreshold: 3`) |
+| `/readyz` | All dependencies healthy (DB ping + schema version) | 503 if any dep down | Readiness probe (`initialDelaySeconds`, `failureThreshold`) |
+| `/health` | Legacy endpoint — returns merged status from both | 200 if both green, 503 otherwise | Not used as a K8s probe; kept for backward compat / health-check tooling (curl) |
+
+#### Mapping to PRD AC5:
+The PRD says `GET /health` returns 200 with `{"status":"ok"}`. We satisfy this by making `/health` return the merged status of both liveness and readiness checks. The K8s probes use `/livez` and `/readyz` directly.
+
+#### Implementation notes:
+- `/livez`: No DB check. Returns 200 always (process is alive). If application code panics unrecoverably, return 503.
+- `/readyz`: Ping the database connection pool (`db.Ping()`). If schema migrations have not run or fail, return 503 with `{"status":"degraded","check":"schema"}`.
+- `/health`: Returns merged status. If either is down, body includes which check failed.
+
+---
+
+### ADR-010: Frontend Serving — Backend Statically Serves the SPA (Not Nginx Proxy)
+**Status**: Accepted
+
+**Current state:** The docker-compose draft in ADR-006 uses separate frontend (nginx:alpine:8081) and backend (Go:8080) as two containers. This creates a CORS problem: the browser on port 8081 makes fetch calls to port 8080 — cross-origin.
+
+#### Options evaluated:
+1. **CORS configuration in Go** — Add `cors` middleware allowing origin `http://localhost:8081`. Works, but adds runtime dependency and is easy to misconfigure. ❌
+2. **Nginx reverse proxy** — Have Nginx on 80 forward `/api` to backend and static files directly. Two containers, one port for the user (port 80), correct CORS implicitly because browser sees origin `localhost:80`. ✅✅  
+3. **Backend serves static files** — Go's `http.FileServer` serves the SPA from `/frontend/`. One container only. But then `/api` vs HTML are on the same origin — no CORS issue at all. ✅✅✅
+
+#### Decision: Backend serves the SPA directly (Option 3)
+The Go backend will use `http.Dir("./frontend")` to serve static files under `/`, with `/api/*` routes taking precedence via handler mux ordering. This gives us:
+- **Zero CORS issues** — same origin for all requests
+- **One service in docker-compose** (db + app only, no nginx container)
+- **Simpler health probes** — only one health endpoint pattern to worry about
+
+#### Docker-compose simplification (ADR-010):
+```yaml
+services:
+  db:
+    image: postgres:16-alpine        # For dev parity, use SQLite instead
+    # ... env vars, volumes, healthcheck ...
+
+  app:
+    build: .                          # Go backend with embedded frontend files
+    ports:
+      - "8080:8080"                   # Serves both SPA and API on same port
+    environment:
+      DATABASE_URL: postgres://demo:demo@db:5432/todos?sslmode=disable  # or SQLite URI for dev
+    depends_on:
+      db: condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+```
+
+#### Implementation note for coding agents:
+Use `embed.FS` in Go to embed frontend files at compile time (cleaner than file server for production). Serve SPA fallback (`index.html`) from `fs.Sub(templates, "frontend")` for all non-API routes. On API mismatches, return 404; on page route matches, serve the index.html with proper `200` + `text/html`.
+
+---
+
+### ADR-011: Error Response Body — Concrete RFC 7807 Struct
+**Status**: Accepted
+
+The PRD says errors follow RFC 7807. Without a concrete Go struct, coding agents will guess. Here is the exact type:
+
+```go
+type ProblemDetail struct {
+    Type    string `json:"type"`             // URI reference for error type (e.g., "https://example.com/probs/not-found")
+    Title   string `json:"title"`            // Short human-readable summary
+    Status  int    `json:"status,omitempty"` // HTTP status code
+    Detail  string `json:"detail,omitempty"` // Human-readable specific to this occurrence
+    Instance *string `json:"instance,omitempty"` // URI for this specific error instance
+}
+```
+
+#### Response examples by status:
+```json
+// 404 Not Found
+{"type":"https://example.com/probs/not-found","title":"Not Found","status":404,"detail":"column not found"}
+
+// 400 Bad Request  
+{"type":"https://example.com/probs/invalid-input","title":"Bad Request","status":400,"detail":"missing required field: columnId"}
+
+// 500 Internal Server Error
+{"type":"https://example.com/probs/internal-error","title":"Internal Server Error","status":500,"detail":"see server logs"}
+```
+
+---
+
+### ADR-012: UUID Generation — Application-Layer (Go) Not Database Default
+**Status**: Accepted
+
+The PRD open questions list this as "High" risk. `gen_random_uuid()` is Postgres 13+; SQLite has no equivalent. `uuid_generate_v4()` requires the `pgcrypto` extension in Postgres. Neither works across backends cleanly.
+
+#### Decision: Generate all UUIDs in Go using `crypto/rand` or `github.com/google/uuid`.
+- Pass explicit UUIDs to `INSERT ... VALUES ($1, $2, ...)` statements
+- No column defaults for `id` — remove `DEFAULT gen_random_uuid()` from migration schema
+- This guarantees identical behavior on SQLite and PostgreSQL with zero conditional logic
+
+#### Migration schema correction (ADR-003-B update):
+```sql
+-- Before (broken across backends):
+id UUID PRIMARY KEY DEFAULT gen_random_uuid()   -- ❌
+
+-- After (correct for all backends):
+id UUID PRIMARY KEY                             -- ✅  Go generates the value
+```
+
+---
+
+## Implementation Readiness Check — Updated
+
+### Checklist Status (all must pass before Phase 5: Implementation)
+- [x] **PRD exists**: `docs/prd.md` with binding acceptance criteria ✅
+- [x] **Phase 4 Epics & Stories exist**: Consolidated in `docs/epics-and-stories.md` + observability in `docs/epics-and-stories.observability.md` ✅  
+- [x] **Architecture decisions documented**: This file now has ADR-001 through ADR-012 (9 new ADRs from this audit) ✅
+- [x] **Technology stack unambiguous**: Go stdlib + SQLite/Postgres via DATABASE_URL + vanilla HTML/CSS/JS + dnd-kit CDN ✅
+- [x] **API contract specified**: All endpoints, schemas, error format in ADR-002 + ADR-011 concrete struct ✅
+- [x] **Database schema defined**: Columns and notes tables per ADR-003-B (UUID generation corrected in ADR-012) ✅
+- [x] **Seed data path defined**: Three default columns via migration seed (ADR-008) + app-level safety net ✅  
+- [x] **Observability pillars agreed**: Health probes, structured logging, OTel tracing → DOD-1 through DOD-5 mapped to OBE stories ✅
+- [x] **Health endpoint standards resolved**: `/livez`, `/readyz`, `/health` in ADR-009 ✅
+- [x] **Frontend serving model resolved**: Backend embeds SPA (ADR-010) — no CORS needed ✅
+- [x] **Execution order clear**: See Critical Path below
+- [ ] **Cardinality budget constraints validated against DOD-2** ⬅️ **ACTION BY o11y-engineer**
+
+### ADR Audit Summary
+| # | ID | Gap Addressed? | Blocked Agent? |
+|---|---|---|---|
+| 1 | Initial seed data (AC1) | ✅ ADDED ADR-008 | YES — agent could ship empty board |
+| 2 | Health endpoint naming inconsistency | ✅ ADDED ADR-009 | MEDIUM — wrong probe semantics fail OBE-S02 AC3 |
+| 3 | Frontend serving model (CORS gap) | ✅ ADDED ADR-010 | YES — docker-compose wouldn't work for user |
+| 4 | Concrete error struct format | ✅ ADDED ADR-011 | MEDIUM — agents would invent different formats |
+| 5 | UUID generation cross-backend | ✅ ADDED ADR-012 | YES — migration fails on SQLite dev |
+
+### Critical Path for Phase 5 Implementation
+
+```
+TB-S01 (schema + seed via migrations)
+    ├─► TB-S02 (columns CRUD) [parallel with TB-S03]
+    ├─► TB-S03 (notes CRUD) [parallel with TB-S02]
+    └─► TB-S04 (move endpoint + /health /readyz)
+
+TB-S05 (frontend: render board + create note) ← depends on TB-S01, S02, S03
+    └─► TB-S06 (drag-and-drop + edit/delete UI)
+
+TB-S07 (docker-compose + README) ← depends on all above
+```
+
+**Observability overlay (runs as parallel concern):**
+- OBE-1 → OBE-2 → OBE-3/OBE-4 (sequential chain: auto-instrument → health probes → manual spans context propagation) → OBE-5 → OBE-6
+
+### Open Questions for Story Writer
+1. **dnd-kit CDN version pin**: Use specific unpkg.com/draft.js/... version or the latest tag? **Recommendation**: Pin to a minor version (e.g., dnd-kit@6.x) — never use `latest` in production. Story writer to confirm with PM.
+2. **SQLite dev path**: ADR-03 says use `modernc.org/sqlite`. Confirm that this pure Go SQLite works in the docker-compose context (no CGO requirements). If not, fall back to postgres everywhere in compose.
+
+---
