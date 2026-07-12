@@ -38,9 +38,9 @@ The go.mod already pulls OpenTelemetry dependencies from OBE-S01; this story reu
 ### AC1: `/livez` returns healthy status when database is reachable
 
 **Given:** The backend server is running  
-**AND:** The PostgreSQL or SQLite database is healthy and accepting queries  
+**And:** The PostgreSQL or SQLite database is healthy and accepting queries  
 **When:** a client sends `GET /livez` to the application's health port  
-**THEN:**
+**Then:**
 - The HTTP response status code is exactly **200 OK**
 - The response body is valid JSON: `{"status":"ok","dependency":{"db":"healthy"}}`
 - The Content-Type header is `application/json; charset=utf-8`
@@ -49,16 +49,16 @@ The go.mod already pulls OpenTelemetry dependencies from OBE-S01; this story reu
 
 **Given:** The backend starts with `DATABASE_URL` pointing to a non-existent host (e.g., `postgres://no-such-host:5432/foo`)  
 **When:** a client sends `GET /livez` after the application has started  
-**THEN:**
+**Then:**
 - The HTTP response status code is exactly **503 Service Unavailable**
 - The body contains: `{"status":"degraded","dependency":{"db":"unhealthy"}}`
 
 ### AC3: `/readyz` returns 200 when the database connection pool is healthy and accepting queries
 
 **Given:** The backend server is running  
-**AND:** The PostgreSQL or SQLite database is healthy  
+**And:** The PostgreSQL or SQLite database is healthy  
 **When:** a client sends `GET /readyz` to the application's health port  
-**THEN:**
+**Then:**
 - The HTTP response status code is exactly **200 OK**
 - The body contains: `{"status":"ok","dependency":{"db":"healthy"}}`
 - The Content-Type header is `application/json; charset=utf-8`
@@ -66,17 +66,17 @@ The go.mod already pulls OpenTelemetry dependencies from OBE-S01; this story reu
 ### AC4: `/readyz` returns 503 when the database connection pool is exhausted or unreachable
 
 **Given:** The backend server is running  
-**AND:** the database connection pool is full OR the database itself is unreachable  
+**And:** the database connection pool is full OR the database itself is unreachable  
 **When:** a client sends `GET /readyz` to the application's health port  
-**THEN:**
+**Then:**
 - The HTTP response status code is exactly **503 Service Unavailable**
 - The body contains: `{"status":"degraded","dependency":{"db":"unhealthy"}}`
 
-### AC5: Health endpoints are unreachable-unblocked by authentication middleware
+### AC5: Health endpoints are accessible without authentication
 
 **Given:** Any authenticated routes exist in the API  
 **When:** a client sends `GET /livez` or `GET /readyz`  
-**THEN:**
+**Then:**
 - No 401 or 403 response is returned (the paths bypass auth middleware entirely)
 - The endpoints are accessible to kubelet / Docker health probes
 
@@ -108,8 +108,3 @@ Can be parallelized with OBE-S03.
 ## Estimate
 
 S (1–2 hours for a Go developer)
-
----
-
-*Written by Story Writer — traces to PRD AC5, G4; Architecture ADR-005-Pillar2/ADR-003-B*
-*Corrections from original:* Fixed title (missing `)` closure), restructured ACs into clear Given/When/Then blocks aligned with PRD AC5, replaced corrupted Dynatrace references with OTel-native dependency checks.

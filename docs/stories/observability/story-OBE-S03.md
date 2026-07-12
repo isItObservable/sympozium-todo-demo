@@ -10,7 +10,7 @@ trace-from-prd: G4 (reliability, hosting), G1 (feature delivery with observabili
 source-epics-file: epics-and-stories.observability.md
 ---
 
-# Story OBE-S03 — Backend Board CRUD Tracing / Span Attribute Tagging + Distributed Context Propagation
+# Story OBE-S03 — Backend CRUD Span Instrumentation, Attribute Tagging & Context Propagation
 
 ## As a backend developer, I want every Kanban CRUD operation (board.create, board.read, board.update, board.delete, note.create, note.read, note.update, note.delete) to produce proper OTel spans with correct trace context propagation, so that Jaeger/Tempo displays a unified waterfall view across all requests.
 
@@ -26,8 +26,8 @@ After the observability baseline is installed (OBE-S01) and health probes are wi
 
 1. Create a **child span** under its parent HTTP span, carrying proper trace context so Jaeger/Tempo stitches it into a waterfall view
 2. Name spans following the convention `<domain>.<action>`:
-   - `board.create`, `board.read`, `board.update`, `board.delete`
-   - `note.create`, `note.read`, `note.update`, `note.delete`
+- `board.create`, `board.read`, `board.update`, `board.delete`
+- `note.create`, `note.read`, `note.update`, `note.delete`
 3. Include required trace attributes (HTTP method, status code, board/note ID). **No cardinality-risking fields** (no user emails, IPs, or arbitrary header/body metadata).
 
 API endpoint contract for reference (ADR-002):
@@ -55,12 +55,12 @@ Required span attributes for every CRUD span:
 
 ### AC1: Every CRUD operation creates a named child span under its parent HTTP span
 
-**Given:** A user sends `GET /api/columns/` 
-**When:** the handler executes `ListColumns()` via the store layer
-**THEN:**
-- An OTel span named **`board.read`** is created as a child of the parent HTTP server span.
-- The span carries all required attributes (see above).
-- On success, the span status is set to `Ok`.
+**Given:** A user sends `GET /api/columns/`  
+**When:** the handler executes `ListColumns()` via the store layer  
+**Then:**
+- An OTel span named **`board.read`** is created as a child of the parent HTTP server span
+- The span carries all required attributes (see above)
+- On success, the span status is set to `Ok`
 
 **Same behavior applies for all board CRUD operations:**
 
@@ -81,33 +81,50 @@ Required span attributes for every CRUD span:
 
 ### AC2: Spans contain ALL required attributes; no cardinality risks
 
-**Given:** A CRUD endpoint is called (e.g., `POST /api/columns/`)
-**When:** the span is created and populated with attributes
-**THEN:**
+**Given:** A CRUD endpoint is called (e.g., `POST /api/columns/`)  
+**When:** the span is created and populated with attributes  
+**Then:**
 - The following non-empty attributes are present:
-  - `http.method` = the HTTP method (GET, POST, PUT, DELETE)
-  - `http.status_code` = the final response status code (201 or 200 for success; 4xx/5xx on error)
-  - `resource.name` = `"kanban-backend"` (inherited from OTEL SDK config)
-  - `board.id` or `note.id` = UUID of the resource when available
-- **No additional attributes appear** that could cause cardinality explosion. Specifically: no user emails, IPs, full request bodies, or arbitrary header values are added as span attributes.
+- `http.method` = the HTTP method (GET, POST, PUT, DELETE)
+- `http.status_code` = the final response status code (201 or 200 for success; 4xx/5xx on error)
+- `resource.name` = `"kanban-backend"` (inherited from OTEL SDK config)
+- `board.id` or `note.id` = UUID of the resource when available  
+**And:** no additional attributes appear that could cause cardinality explosion. Specifically: no user emails, IPs, full request bodies, or arbitrary header values are added as span attributes.
+
+**Scenario 2.1: POST with body content not leaked into span**  
+**Given:** A `POST /api/columns/` is made with a large title and body in the request payload  
+**When:** the `board.create` span is recorded  
+**Then:** the request body is NOT included as any span attribute
 
 ### AC3: Error spans correctly capture exception information
 
-**Given:** A handler encounters an unrecoverable DB error or a validation failure
-**When:** the response is HTTP status ≥ 500  
-**THEN:**
+**Given:** A handler encounters an unrecoverable DB error or a validation failure  
+**When:** the response is HTTP status >= 500  
+**Then:**
 - The span status is explicitly set to `Error` via `span.SetStatus(codes.Error, ...)`
 - `exception.message` contains a human-readable message (e.g., `"no column found for id"`)
 - `exception.type` includes the Go error type (e.g., `"NotFoundError"` or `"ValidationError"`)
 
+**Scenario 3.1: Validation error (4xx response)**  
+**Given:** A `PUT /api/columns/:id` is called with an invalid (malformed) UUID  
+**When:** the handler returns HTTP 400 with a validation error  
+**Then:**
+- The span status is NOT set to `Error` (4xx client errors are not spans with Error status — they return success spans at their actual status code, per OTel convention)
+- OR if the team conventionally marks all non-2xx as Error: the span IS marked Error but exception.message is omitted or limited to `"invalid input"`
+
 ### AC4: Distributed trace context propagates correctly across calls
 
-**Given:** A user performs a sequence of operations via the UI (create a note → drag it to another column → delete it)
-**When:** these three requests arrive at the backend in sequence
-**THEN:**
-- All three spans share the **same `traceID`** so Jaeger/Tempo displays them as a waterfall.
-- Each span's `parentSpanID` correctly references its predecessor within that trace.
-- The context propagation uses standard W3C Trace Context headers (`traceparent`, `tracestate`).
+**Given:** A user performs a sequence of operations via the UI (create a note → drag it to another column → delete it)  
+**When:** these three requests arrive at the backend in sequence  
+**Then:**
+- All three spans share the **same `traceID`** so Jaeger/Tempo displays them as a waterfall
+- Each span's `parentSpanID` correctly references its predecessor within that trace
+- The context propagation uses standard W3C Trace Context headers (`traceparent`, `tracestate`)
+
+**Scenario 4.1: Out-of-band request breaks a trace**  
+**Given:** A valid trace exists for note ID X created by user A  
+**When:** user B independently creates and deletes the same note ID X (overwriting)  
+**Then:** user B's operations create a SEPARATE trace with its own `traceID`; user A's original trace remains intact
 
 ---
 
@@ -135,9 +152,4 @@ Can be parallelized with OBE-S05 (Prometheus metrics) but MUST complete before O
 
 ## Estimate
 
-M (3–5 hours for a Go developer, mostly for span attribute mapping & manual OTel SDK integration)
-
----
-
-*Written by Story Writer — traces to PRD G4, FR1–FR3, AC4; Architecture ADR-002/ADR-003-B*
-*Corrections from original:* Fixed corrupted API contract table (misaligned pipes, typo "colunn" → correct column names/status codes), rewrote Go struct in Context as accurate attribute map instead of malformed code snippet, converted incomplete/broken AC lines into proper GWT format, added trace context propagation check (AC4) which was implied but not stated in original.
+M (3–5 hours for a Go dev familiar with OTel context propagation and manual span creation)

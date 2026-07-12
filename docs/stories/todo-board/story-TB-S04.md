@@ -5,6 +5,7 @@ status: READY_FOR_IMPLEMENTATION
 artifact-type: story
 owner: coding-agent
 created: 2026-07-03
+updated: 2026-07-12
 ---
 
 # Story TB-S04 — Move Note Endpoint + Health Check
@@ -36,52 +37,74 @@ The move note API is the core "Kanban" behavior — it reassigns a note from one
 
 **Given** a note exists in column A (the source column)  
 **When** a client sends `POST /api/notes/<note-id>/move` with body `{"columnId": "<valid-uuid-of-column-B>"}` where column B is a different valid, existing column  
-**THEN**:
+**Then**:
 - The response status is 200 OK
 - The note's `column_id` in the database is now equal to `<column-B-uuid>`
 - The response body contains the full updated note with the new `column_id`
 - A subsequent `GET /api/notes/?column_id=<column-A-id>` does NOT include this note
 - A subsequent `GET /api/notes/?column_id=<column-B-id>` DOES include this note
 
+**Scenario 1.1: Move to same column (edge case)**  
+**Given** a note exists in column A  
+**When** `POST /api/notes/<note-id>/move` is sent with `{"columnId": "<column-A-uuid>"}` (same column)  
+**Then**:
+- The response status is 200 OK (the operation is idempotent — no error)
+- The note's `updated_at` timestamp is refreshed
+
 ### AC2: Move returns 404 for a non-existent note id
 
 **Given** no note exists with id `<nonexistent-uuid>`  
 **When** `POST /api/notes/<nonexistent-uuid>/move` is sent with body `{"columnId": "<valid-column-id>"}`  
-**THEN**:
+**Then**:
 - The response status is 404 Not Found
 - The RFC 7807 error body includes `'note not found'`
+
+**Scenario 2.1: Valid note, invalid column**  
+**Given** a valid note exists in column A  
+**When** `POST /api/notes/<valid-note-id>/move` is sent with `{"columnId": "<nonexistent-uuid>"}`  
+**Then**:
+- The response status is 404 Not Found (or 400)
+- The RFC 7807 error body includes `'column not found'` or equivalent message
 
 ### AC3: Move returns 400 if columnId is missing from request body
 
 **Given** a valid note exists  
 **When** `POST /api/notes/<valid-note-id>/move` is sent with body `{}` or without a JSON body (or no `columnId` key)  
-**THEN**:
+**Then**:
 - The response status is 400 Bad Request
-- The RFC 7807 error body includes `'columnId is required'` or equivalent validation message
+- The RFC 7807 error body includes `'columnId is required'` or an equivalent validation message
+
+**Scenario 3.1: Missing columnId in partial JSON**  
+**Given** a valid note exists  
+**When** `POST /api/notes/<valid-note-id>/move` is sent with `{"otherField": "value"}` (no columnId key)  
+**Then**:
+- The response status is 400 Bad Request
+- The error body includes `'columnId is required'`
 
 ### AC4: Move operation validated with automated API test
 
 **Given** the application is running locally  
 **When** `tests/note_move_test.sh` (or Go integration test) executes  
-**THEN**:
-- It verifies: successful move returns status 200 + note appears in target column
-- It verifies: non-existent note returns 404
-- It verifies: missing columnId returns 400
+**Then**:
+- It verifies successful move returns status 200 and the note appears in the target column
+- It verifies non-existent note returns 404
+- It verifies missing columnId returns 400
+- It verifies valid note with invalid column returns 404 or 400
 - All tests pass (exit code 0)
 
 ### AC5: `/health` endpoint returns `{"status":"ok"}` with HTTP 200
 
 **Given** the application is running (Docker container started or local binary)  
 **When** a client sends `GET /health`  
-**THEN**:
+**Then**:
 - The response status is exactly HTTP 200
 - The `Content-Type` header includes `application/json`
 - The body is `{"status":"ok"}` with no extra fields or whitespace issues that break JSON parsing
 
 **Scenario 5.1: Health during startup (within first 10 seconds)**  
-- **Given** the docker container has just been started via `docker-compose up -d`  
-- **When** `curl -s http://localhost:<backend-port>/health` is called within 10 seconds post-startup  
-- **THEN** it returns HTTP 200 with `{"status":"ok"}` (the backend starts fast enough that DB init has completed)
+**Given** the docker container has just been started via `docker-compose up -d`  
+**When** `curl -s http://localhost:<backend-port>/health` is called within 10 seconds post-startup  
+**Then** it returns HTTP 200 with `{"status":"ok"}` (the backend starts fast enough that DB init has completed)
 
 ## Technical Implementation Notes
 
@@ -103,3 +126,4 @@ The move note API is the core "Kanban" behavior — it reassigns a note from one
 ---
 
 *Written by Story Writer — traces to PRD FR3/FR4/AC1/AC2/AC6, Architecture ADR-002/ADR-005-Pillar1*
+*Updated 2026-07-12: GWT formatting standardized; moved-to-same-column edge case added.*
