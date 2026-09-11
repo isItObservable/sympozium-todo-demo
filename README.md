@@ -1,5 +1,19 @@
-# sympozium-todo-demo
+# Sympozium Todo Demo
 
-Demo app built live by the Sympozium **bmad-ensemble** crew for the IsItObservable episode.
+A todo/post-it board application built with the BMAD methodology.
 
-Target: a todo / virtual post-it board — database + backend service + frontend. The crew works ticket-driven via BMAD phases; each PR is one story.
+## Architecture
+
+This project follows the BMAD (Behavior, Model, Action, Display) architecture pattern for building reactive UI applications.
+
+## Getting Started
+
+1. Clone the repository
+2. Install dependencies: `npm install`
+3. Run the app: `npm start`
+
+## Development
+
+- Follow the BMAD component boundaries
+- Write tests for all new features
+- Keep PRs focused and reviewable
