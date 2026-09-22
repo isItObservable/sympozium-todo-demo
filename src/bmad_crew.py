@@ -1,118 +1,154 @@
-"""BMAD Crew — task management for the BMAD (Build-Merge-Audit-Deliver) workflow.
+"""
+BMAD Crew - Sympozium Todo Demo
 
-This module provides a simple crew-based task tracker that supports:
-  - Creating and managing crew members
-  - Assigning tasks to crew members
-  - Tracking task status through the BMAD pipeline stages
+Manages a crew of BMAD agents that coordinate to track, prioritize,
+and execute todo items across the system.
 """
 
 from __future__ import annotations
 
-import uuid
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
+logger = logging.getLogger(__name__)
 
-class TaskStatus(Enum):
-    """Pipeline stage for a BMAD task."""
-    TODO = "todo"
+
+class CrewRole(Enum):
+    """BMAD crew member roles."""
+    SCRUM_MASTER = "scrum_master"
+    DEVELOPER = "developer"
+    ARCHITECT = "architect"
+    REVIEWER = "reviewer"
+
+
+class TodoStatus(Enum):
+    """Status of a todo item in the BMAD crew workflow."""
+    BACKLOG = "backlog"
     IN_PROGRESS = "in_progress"
-    REVIEW = "review"
+    IN_REVIEW = "in_review"
     DONE = "done"
+    BLOCKED = "blocked"
+
+
+@dataclass
+class TodoItem:
+    """Represents a single todo item managed by the BMAD crew."""
+
+    title: str
+    description: str = ""
+    status: TodoStatus = TodoStatus.BACKLOG
+    assigned_role: Optional[CrewRole] = None
+    priority: int = 0  # Higher number = higher priority
+    story_id: Optional[str] = None
+
+    def __repr__(self) -> str:
+        return (
+            f"TodoItem(title={self.title!r}, status={self.status.value}, "
+            f"priority={self.priority})"
+        )
 
 
 @dataclass
 class CrewMember:
-    """A member of the BMAD crew."""
+    """A single member of the BMAD crew."""
 
     name: str
-    id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
-    role: str = "developer"
+    role: CrewRole
+    assigned_todos: list[TodoItem] = field(default_factory=list)
+
+    def assign(self, todo: TodoItem) -> None:
+        """Assign a todo item to this crew member."""
+        self.assigned_todos.append(todo)
+        todo.assigned_role = self.role
+        logger.info("Assigned %s to %s", todo.title, self.name)
+
+    def unassign(self, todo: TodoItem) -> None:
+        """Remove a todo item from this crew member."""
+        if todo in self.assigned_todos:
+            self.assigned_todos.remove(todo)
+            logger.info("Unassigned %s from %s", todo.title, self.name)
 
     def __repr__(self) -> str:
-        return f"CrewMember(name={self.name!r}, role={self.role!r})"
-
-
-@dataclass
-class Task:
-    """A single BMAD task assigned to a crew member."""
-
-    title: str
-    id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
-    status: TaskStatus = TaskStatus.TODO
-    assignee: Optional[CrewMember] = None
-    description: str = ""
-
-    def __repr__(self) -> str:
-        return f"Task(id={self.id!r}, title={self.title!r}, status={self.status.value!r})"
+        return f"CrewMember(name={self.name!r}, role={self.role.value})"
 
 
 class BMADCrew:
-    """Manages a crew of members and their tasks through the BMAD pipeline."""
+    """Coordinates the BMAD crew to manage todos and execute stories."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str = "BMAD Crew") -> None:
         self.name = name
         self.members: list[CrewMember] = []
-        self.tasks: list[Task] = []
+        self.todos: list[TodoItem] = []
+        logger.info("Created BMAD crew: %s", self.name)
 
-    # -- member management ---------------------------------------------------
-
-    def add_member(self, name: str, role: str = "developer") -> CrewMember:
-        """Add a new crew member and return it."""
-        member = CrewMember(name=name, role=role)
+    def add_member(self, member: CrewMember) -> None:
+        """Add a member to the crew."""
         self.members.append(member)
-        return member
+        logger.info("Added %s to crew", member.name)
 
-    def remove_member(self, member_id: str) -> None:
-        """Remove a crew member by ID. Tasks remain but become unassigned."""
-        self.members = [m for m in self.members if m.id != member_id]
-
-    # -- task management -----------------------------------------------------
-
-    def create_task(
+    def create_todo(
         self,
         title: str,
-        assignee: Optional[CrewMember] = None,
         description: str = "",
-    ) -> Task:
-        """Create a new task in TODO status."""
-        task = Task(title=title, assignee=assignee, description=description)
-        self.tasks.append(task)
-        return task
+        priority: int = 0,
+        story_id: Optional[str] = None,
+    ) -> TodoItem:
+        """Create a new todo item and add it to the backlog."""
+        todo = TodoItem(
+            title=title,
+            description=description,
+            priority=priority,
+            story_id=story_id,
+        )
+        self.todos.append(todo)
+        logger.info("Created todo: %s (priority=%d)", title, priority)
+        return todo
 
-    def assign_task(self, task_id: str, member: CrewMember) -> None:
-        """Assign an existing task to a crew member."""
-        for task in self.tasks:
-            if task.id == task_id:
-                task.assignee = member
-                return
-        raise ValueError(f"Task {task_id!r} not found")
+    def prioritize_backlog(self) -> list[TodoItem]:
+        """Sort todos by priority descending and return the ordered backlog."""
+        self.todos.sort(key=lambda t: t.priority, reverse=True)
+        logger.info("Prioritized backlog: %d items", len(self.todos))
+        return self.todos
 
-    def advance_task(self, task_id: str) -> TaskStatus:
-        """Advance a task to the next BMAD stage. Returns the new status."""
-        for task in self.tasks:
-            if task.id == task_id:
-                stage_order = list(TaskStatus)
-                current_idx = stage_order.index(task.status)
-                if current_idx < len(stage_order) - 1:
-                    task.status = stage_order[current_idx + 1]
-                return task.status
-        raise ValueError(f"Task {task_id!r} not found")
+    def assign_to_role(
+        self, todo: TodoItem, role: CrewRole
+    ) -> Optional[CrewMember]:
+        """Find a crew member with the matching role and assign the todo."""
+        for member in self.members:
+            if member.role == role:
+                member.assign(todo)
+                return member
+        logger.warning("No crew member found for role: %s", role.value)
+        return None
 
-    # -- queries -------------------------------------------------------------
+    def move_to_status(self, todo: TodoItem, status: TodoStatus) -> None:
+        """Transition a todo item to a new status."""
+        if todo not in self.todos:
+            raise ValueError(f"Todo {todo.title!r} is not in this crew's backlog")
+        old_status = todo.status
+        todo.status = status
+        logger.info(
+            "Moved %s: %s -> %s",
+            todo.title,
+            old_status.value,
+            status.value,
+        )
 
-    def get_tasks_by_status(self, status: TaskStatus) -> list[Task]:
-        """Return all tasks matching the given status."""
-        return [t for t in self.tasks if t.status == status]
-
-    def get_member_tasks(self, member: CrewMember) -> list[Task]:
-        """Return all tasks assigned to a specific crew member."""
-        return [t for t in self.tasks if t.assignee and t.assignee.id == member.id]
+    def get_by_status(self, status: TodoStatus) -> list[TodoItem]:
+        """Return all todos with the given status."""
+        return [t for t in self.todos if t.status == status]
 
     def summary(self) -> dict[str, int]:
-        """Return a count of tasks per status."""
-        counts: dict[str, int] = {s.value: 0 for s in TaskStatus}
-        for task in self.tasks:
-            counts[task.status.value] += 1
+        """Return a count of todos grouped by status."""
+        counts: dict[str, int] = {s.value: 0 for s in TodoStatus}
+        for todo in self.todos:
+            counts[todo.status.value] += 1
         return counts
+
+    def __repr__(self) -> str:
+        return (
+            f"BMADCrew(name={self.name!r}, members={len(self.members)}, "
+            f"todos={len(self.todos)})"
+        )
