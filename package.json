@@ -1,0 +1,12 @@
+{
+  "name": "sympozium-todo-demo",
+  "version": "1.0.0",
+  "description": "Sympozium Todo Demo - BMAD Crew Implementation",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node --test test/**/*.test.js"
+  },
+  "keywords": ["bmad", "crew", "demo"],
+  "author": "Henrik Rexed",
+  "license": "MIT"
+}
