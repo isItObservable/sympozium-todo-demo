@@ -1,25 +1,17 @@
-# BMAD Crew Demo
+# sympozium-todo-demo
 
-A demo project implementing the BMAD (Battle-Tested, Modular, Autonomous, Deployable) crew pattern for the sympozium-todo-demo.
+A demo repository for the BMAD crew implementation.
 
-## Setup
+## Getting Started
 
-```bash
-pip install -r requirements.txt
-```
+1. Clone this repository
+2. Install dependencies
+3. Run the application
 
-## Testing
+## Contributing
 
-```bash
-pytest tests/
-```
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
 
-## Usage
+## License
 
-```python
-from src.bmad_crew import BMADCrew, CrewMember
-
-crew = BMADCrew("my-team")
-crew.add_member(CrewMember("alice", "engineer"))
-print(f"Crew size: {crew.size}")
-```
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
