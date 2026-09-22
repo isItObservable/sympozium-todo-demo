@@ -1,4 +1,9 @@
-"""BMAD Crew — todo-demo crew management for resume operations."""
+"""BMAD Crew — Todo demo implementation.
+
+This module provides the core BMAD crew functionality for the
+sympozium-todo-demo application, implementing the highest-priority
+story: 'resume our bmad crew and'.
+"""
 
 from __future__ import annotations
 
@@ -10,78 +15,89 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-class CrewRole(str, Enum):
-    """Roles available in the BMAD crew."""
+class CrewStatus(Enum):
+    """Possible states of a BMAD crew."""
 
-    LEADER = "leader"
-    DEVELOPER = "developer"
-    REVIEWER = "reviewer"
-    OBSERVER = "observer"
+    DORMANT = "dormant"
+    ACTIVE = "active"
+    PAUSED = "paused"
 
 
 @dataclass
 class CrewMember:
-    """A single member of the BMAD crew."""
+    """Represents a single member of the BMAD crew."""
 
     name: str
-    role: CrewRole
-    active: bool = True
-    tasks_completed: int = 0
+    role: str
+    status: CrewStatus = CrewStatus.ACTIVE
 
-    def complete_task(self) -> None:
-        """Mark a task as completed by this member."""
-        if not self.active:
-            logger.warning("Cannot complete task: %s is inactive", self.name)
-            return
-        self.tasks_completed += 1
-        logger.info(
-            "%s (%s) completed task — total: %d",
-            self.name,
-            self.role.value,
-            self.tasks_completed,
-        )
-
-    def deactivate(self) -> None:
-        """Deactivate this crew member."""
-        self.active = False
-        logger.info("%s (%s) deactivated", self.name, self.role.value)
+    def __repr__(self) -> str:
+        return f"CrewMember(name={self.name!r}, role={self.role!r}, status={self.status.value})"
 
 
 @dataclass
 class BMADCrew:
-    """The BMAD crew that manages todo-demo resume operations."""
+    """Manages a crew of members for the todo demo.
+
+    Acceptance criteria:
+    - Crew can be created with an initial set of members.
+    - Crew resumes from dormant state to active.
+    - Members can be added and removed dynamically.
+    - Crew status transitions are validated (dormant -> active, active -> paused, etc.).
+    """
 
     name: str
     members: list[CrewMember] = field(default_factory=list)
-    _resume_state: dict[str, str] = field(default_factory=dict)
+    status: CrewStatus = CrewStatus.DORMANT
 
-    def add_member(self, member: CrewMember) -> None:
+    def resume(self) -> None:
+        """Resume the crew from dormant state to active."""
+        if self.status != CrewStatus.DORMANT:
+            raise ValueError(
+                f"Cannot resume crew '{self.name}': current status is {self.status.value}, expected 'dormant'."
+            )
+        self.status = CrewStatus.ACTIVE
+        logger.info("Crew '%s' resumed to active state.", self.name)
+
+    def pause(self) -> None:
+        """Pause the crew (active -> paused)."""
+        if self.status != CrewStatus.ACTIVE:
+            raise ValueError(
+                f"Cannot pause crew '{self.name}': current status is {self.status.value}, expected 'active'."
+            )
+        self.status = CrewStatus.PAUSED
+        logger.info("Crew '%s' paused.", self.name)
+
+    def add_member(self, name: str, role: str) -> None:
         """Add a member to the crew."""
-        self.members.append(member)
-        logger.info("Added %s (%s) to crew '%s'", member.name, member.role.value, self.name)
+        if any(m.name == name for m in self.members):
+            raise ValueError(f"Member '{name}' already exists in crew '{self.name}'.")
+        self.members.append(CrewMember(name=name, role=role))
+        logger.info("Added member '%s' (role=%s) to crew '%s'.", name, role, self.name)
 
-    def resume_crew(self) -> list[str]:
-        """Resume all active crew members and return their names."""
-        resumed: list[str] = []
-        for member in self.members:
-            if not member.active:
-                logger.debug("Skipping inactive member: %s", member.name)
-                continue
-            member.active = True
-            resumed.append(member.name)
-            logger.info("Resumed crew member: %s (%s)", member.name, member.role.value)
-        self._resume_state["last_resumed"] = ", ".join(resumed) if resumed else "none"
-        return resumed
+    def remove_member(self, name: str) -> None:
+        """Remove a member from the crew by name."""
+        before = len(self.members)
+        self.members = [m for m in self.members if m.name != name]
+        if len(self.members) == before:
+            raise KeyError(f"Member '{name}' not found in crew '{self.name}'.")
+        logger.info("Removed member '%s' from crew '%s'.", name, self.name)
 
-    def get_active_count(self) -> int:
-        """Return the number of active crew members."""
-        return sum(1 for m in self.members if m.active)
+    def get_active_members(self) -> list[CrewMember]:
+        """Return all members whose status is ACTIVE."""
+        return [m for m in self.members if m.status == CrewStatus.ACTIVE]
 
-    def get_summary(self) -> dict[str, str | int]:
-        """Return a summary of the current crew state."""
-        return {
-            "crew_name": self.name,
-            "total_members": len(self.members),
-            "active_members": self.get_active_count(),
-            "last_resumed": self._resume_state.get("last_resumed", "never"),
-        }
+    def __repr__(self) -> str:
+        return (
+            f"BMADCrew(name={self.name!r}, status={self.status.value}, "
+            f"members={len(self.members)})"
+        )
+
+
+def create_default_crew() -> BMADCrew:
+    """Factory function that creates the default BMAD crew for the demo."""
+    crew = BMADCrew(name="bmad-crew")
+    crew.add_member("Amelia", "Senior Engineer")
+    crew.add_member("Ben", "QA Lead")
+    crew.add_member("Charlie", "DevOps")
+    return crew
