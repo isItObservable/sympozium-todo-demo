@@ -1,173 +1,87 @@
-"""BMAD Crew — autonomous crew implementation for sympozium-todo-demo.
-
-The BMAD (Bug-Motivation-Action-Delivery) crew provides a lightweight
-autonomous workflow engine that can be plugged into the existing demo
-pipeline. It exposes a simple ``Crew`` class with lifecycle hooks and
-a ``Task`` dataclass for representing work items.
-"""
+"""BMAD Crew — todo-demo crew management for resume operations."""
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Enums
-# ---------------------------------------------------------------------------
+class CrewRole(str, Enum):
+    """Roles available in the BMAD crew."""
 
-class TaskStatus(Enum):
-    """Possible states for a BMAD task."""
+    LEADER = "leader"
+    DEVELOPER = "developer"
+    REVIEWER = "reviewer"
+    OBSERVER = "observer"
 
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    DONE = "done"
-    FAILED = "failed"
-
-
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
 
 @dataclass
-class Task:
-    """A single work item in the BMAD crew pipeline.
-
-    Attributes:
-        name: Human-readable identifier for this task.
-        payload: Arbitrary data carried through the pipeline.
-        status: Current lifecycle state (defaults to ``PENDING``).
-        result: Populated when ``status == DONE``.
-        error: Populated when ``status == FAILED``.
-    """
+class CrewMember:
+    """A single member of the BMAD crew."""
 
     name: str
-    payload: dict[str, Any] = field(default_factory=dict)
-    status: TaskStatus = TaskStatus.PENDING
-    result: Optional[Any] = None
-    error: Optional[Exception] = None
+    role: CrewRole
+    active: bool = True
+    tasks_completed: int = 0
 
-
-# ---------------------------------------------------------------------------
-# Crew
-# ---------------------------------------------------------------------------
-
-class Crew:
-    """Orchestrates a sequence of BMAD tasks.
-
-    Usage::
-
-        crew = Crew(name="demo-crew")
-        crew.add_task("greet", lambda t: {"message": f"Hello {t.payload['name']}!"})
-        crew.execute()
-    """
-
-    def __init__(self, name: str) -> None:
-        self.name = name
-        self._tasks: list[tuple[str, Callable[[Task], Any]]] = []
-        self.results: dict[str, Any] = {}
-
-    # -- public API --------------------------------------------------------
-
-    def add_task(
-        self,
-        name: str,
-        handler: Callable[[Task], Any],
-    ) -> None:
-        """Register a named task with its handler callable.
-
-        The handler receives the current ``Task`` instance and should return
-        a result (or raise to signal failure).
-        """
-        self._tasks.append((name, handler))
-
-    def execute(self) -> dict[str, Any]:
-        """Run all registered tasks in order.
-
-        Returns:
-            A mapping of task name → result for every successfully completed
-            task. Tasks that fail are recorded with ``status == FAILED`` and
-            their exception is attached to ``task.error``.
-        """
-        logger.info("Crew '%s' starting with %d task(s)", self.name, len(self._tasks))
-
-        for task_name, handler in self._tasks:
-            task = Task(name=task_name)
-            task.status = TaskStatus.IN_PROGRESS
-            logger.debug("Executing task '%s'", task_name)
-
-            try:
-                result = handler(task)
-                task.result = result
-                task.status = TaskStatus.DONE
-                self.results[task_name] = result
-                logger.info("Task '%s' completed successfully", task_name)
-            except Exception as exc:
-                task.error = exc
-                task.status = TaskStatus.FAILED
-                logger.error("Task '%s' failed: %s", task_name, exc, exc_info=exc)
-
+    def complete_task(self) -> None:
+        """Mark a task as completed by this member."""
+        if not self.active:
+            logger.warning("Cannot complete task: %s is inactive", self.name)
+            return
+        self.tasks_completed += 1
         logger.info(
-            "Crew '%s' finished — %d succeeded, %d failed",
+            "%s (%s) completed task — total: %d",
             self.name,
-            sum(1 for t in self._tasks if self.results.get(t[0]) is not None),
-            len(self._tasks) - len(self.results),
+            self.role.value,
+            self.tasks_completed,
         )
-        return self.results
 
-    @property
-    def completed_tasks(self) -> list[str]:
-        """Return names of tasks that reached ``DONE``."""
-        return [name for name in self.results]
-
-    @property
-    def failed_tasks(self) -> list[str]:
-        """Return names of tasks that reached ``FAILED``."""
-        return [name for name, _ in self._tasks if name not in self.results]
+    def deactivate(self) -> None:
+        """Deactivate this crew member."""
+        self.active = False
+        logger.info("%s (%s) deactivated", self.name, self.role.value)
 
 
-# ---------------------------------------------------------------------------
-# Convenience helpers
-# ---------------------------------------------------------------------------
+@dataclass
+class BMADCrew:
+    """The BMAD crew that manages todo-demo resume operations."""
 
-def run_crew(name: str, tasks: dict[str, Callable[[Task], Any]]) -> dict[str, Any]:
-    """One-liner to create a crew, add tasks, and execute.
+    name: str
+    members: list[CrewMember] = field(default_factory=list)
+    _resume_state: dict[str, str] = field(default_factory=dict)
 
-    Args:
-        name: Crew identifier.
-        tasks: Mapping of task name → handler callable.
+    def add_member(self, member: CrewMember) -> None:
+        """Add a member to the crew."""
+        self.members.append(member)
+        logger.info("Added %s (%s) to crew '%s'", member.name, member.role.value, self.name)
 
-    Returns:
-        Result dictionary keyed by task name.
-    """
-    crew = Crew(name=name)
-    for task_name, handler in tasks.items():
-        crew.add_task(task_name, handler)
-    return crew.execute()
+    def resume_crew(self) -> list[str]:
+        """Resume all active crew members and return their names."""
+        resumed: list[str] = []
+        for member in self.members:
+            if not member.active:
+                logger.debug("Skipping inactive member: %s", member.name)
+                continue
+            member.active = True
+            resumed.append(member.name)
+            logger.info("Resumed crew member: %s (%s)", member.name, member.role.value)
+        self._resume_state["last_resumed"] = ", ".join(resumed) if resumed else "none"
+        return resumed
 
+    def get_active_count(self) -> int:
+        """Return the number of active crew members."""
+        return sum(1 for m in self.members if m.active)
 
-# ---------------------------------------------------------------------------
-# CLI entry-point (optional)
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-
-    def greet(task: Task) -> dict[str, str]:
-        return {"greeting": f"Hello, {task.payload.get('name', 'World')}!"}
-
-    def summarize(task: Task) -> dict[str, int]:
-        return {"char_count": sum(len(str(v)) for v in task.payload.values())}
-
-    results = run_crew(
-        name="demo",
-        tasks={
-            "greet": greet,
-            "summarize": summarize,
-        },
-    )
-    print("Results:", results)
+    def get_summary(self) -> dict[str, str | int]:
+        """Return a summary of the current crew state."""
+        return {
+            "crew_name": self.name,
+            "total_members": len(self.members),
+            "active_members": self.get_active_count(),
+            "last_resumed": self._resume_state.get("last_resumed", "never"),
+        }
