@@ -1,13 +1,25 @@
-# BMAD Crew Implementation
+# BMAD Crew Demo
 
-This feature implements the highest-priority story for "resume our bmad crew and".
+A demo project implementing the BMAD (Battle-Tested, Modular, Autonomous, Deployable) crew pattern for the sympozium-todo-demo.
 
-## Changes
-- Added crew management module
-- Implemented crew roster functionality
-- Added crew status tracking
+## Setup
 
-## Acceptance Criteria
-- [ ] Crew can be created with members
-- [ ] Crew status can be updated
-- [ ] Crew roster is persisted
+```bash
+pip install -r requirements.txt
+```
+
+## Testing
+
+```bash
+pytest tests/
+```
+
+## Usage
+
+```python
+from src.bmad_crew import BMADCrew, CrewMember
+
+crew = BMADCrew("my-team")
+crew.add_member(CrewMember("alice", "engineer"))
+print(f"Crew size: {crew.size}")
+```
