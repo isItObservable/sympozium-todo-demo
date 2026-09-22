@@ -1,14 +1,13 @@
 # BMAD Crew Implementation
 
-This branch implements the highest-priority story for the BMAD crew feature.
+This feature implements the highest-priority story for "resume our bmad crew and".
 
 ## Changes
-- Added `BMADCrew` class with member management and role assignment
-- Added comprehensive tests in `test/bmad-crew.test.js`
-- Updated `package.json` with test script
+- Added crew management module
+- Implemented crew roster functionality
+- Added crew status tracking
 
-## Commit SHAs
-See branch history on GitHub.
-
-## PR URL
-https://github.com/isItObservable/sympozium-todo-demo/pull/1
+## Acceptance Criteria
+- [ ] Crew can be created with members
+- [ ] Crew status can be updated
+- [ ] Crew roster is persisted
