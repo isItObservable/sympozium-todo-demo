@@ -1,103 +1,118 @@
-"""BMAD Crew — Todo demo implementation.
+"""BMAD Crew — task management for the BMAD (Build-Merge-Audit-Deliver) workflow.
 
-This module provides the core BMAD crew functionality for the
-sympozium-todo-demo application, implementing the highest-priority
-story: 'resume our bmad crew and'.
+This module provides a simple crew-based task tracker that supports:
+  - Creating and managing crew members
+  - Assigning tasks to crew members
+  - Tracking task status through the BMAD pipeline stages
 """
 
 from __future__ import annotations
 
-import logging
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-logger = logging.getLogger(__name__)
 
-
-class CrewStatus(Enum):
-    """Possible states of a BMAD crew."""
-
-    DORMANT = "dormant"
-    ACTIVE = "active"
-    PAUSED = "paused"
+class TaskStatus(Enum):
+    """Pipeline stage for a BMAD task."""
+    TODO = "todo"
+    IN_PROGRESS = "in_progress"
+    REVIEW = "review"
+    DONE = "done"
 
 
 @dataclass
 class CrewMember:
-    """Represents a single member of the BMAD crew."""
+    """A member of the BMAD crew."""
 
     name: str
-    role: str
-    status: CrewStatus = CrewStatus.ACTIVE
+    id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    role: str = "developer"
 
     def __repr__(self) -> str:
-        return f"CrewMember(name={self.name!r}, role={self.role!r}, status={self.status.value})"
+        return f"CrewMember(name={self.name!r}, role={self.role!r})"
 
 
 @dataclass
-class BMADCrew:
-    """Manages a crew of members for the todo demo.
+class Task:
+    """A single BMAD task assigned to a crew member."""
 
-    Acceptance criteria:
-    - Crew can be created with an initial set of members.
-    - Crew resumes from dormant state to active.
-    - Members can be added and removed dynamically.
-    - Crew status transitions are validated (dormant -> active, active -> paused, etc.).
-    """
-
-    name: str
-    members: list[CrewMember] = field(default_factory=list)
-    status: CrewStatus = CrewStatus.DORMANT
-
-    def resume(self) -> None:
-        """Resume the crew from dormant state to active."""
-        if self.status != CrewStatus.DORMANT:
-            raise ValueError(
-                f"Cannot resume crew '{self.name}': current status is {self.status.value}, expected 'dormant'."
-            )
-        self.status = CrewStatus.ACTIVE
-        logger.info("Crew '%s' resumed to active state.", self.name)
-
-    def pause(self) -> None:
-        """Pause the crew (active -> paused)."""
-        if self.status != CrewStatus.ACTIVE:
-            raise ValueError(
-                f"Cannot pause crew '{self.name}': current status is {self.status.value}, expected 'active'."
-            )
-        self.status = CrewStatus.PAUSED
-        logger.info("Crew '%s' paused.", self.name)
-
-    def add_member(self, name: str, role: str) -> None:
-        """Add a member to the crew."""
-        if any(m.name == name for m in self.members):
-            raise ValueError(f"Member '{name}' already exists in crew '{self.name}'.")
-        self.members.append(CrewMember(name=name, role=role))
-        logger.info("Added member '%s' (role=%s) to crew '%s'.", name, role, self.name)
-
-    def remove_member(self, name: str) -> None:
-        """Remove a member from the crew by name."""
-        before = len(self.members)
-        self.members = [m for m in self.members if m.name != name]
-        if len(self.members) == before:
-            raise KeyError(f"Member '{name}' not found in crew '{self.name}'.")
-        logger.info("Removed member '%s' from crew '%s'.", name, self.name)
-
-    def get_active_members(self) -> list[CrewMember]:
-        """Return all members whose status is ACTIVE."""
-        return [m for m in self.members if m.status == CrewStatus.ACTIVE]
+    title: str
+    id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    status: TaskStatus = TaskStatus.TODO
+    assignee: Optional[CrewMember] = None
+    description: str = ""
 
     def __repr__(self) -> str:
-        return (
-            f"BMADCrew(name={self.name!r}, status={self.status.value}, "
-            f"members={len(self.members)})"
-        )
+        return f"Task(id={self.id!r}, title={self.title!r}, status={self.status.value!r})"
 
 
-def create_default_crew() -> BMADCrew:
-    """Factory function that creates the default BMAD crew for the demo."""
-    crew = BMADCrew(name="bmad-crew")
-    crew.add_member("Amelia", "Senior Engineer")
-    crew.add_member("Ben", "QA Lead")
-    crew.add_member("Charlie", "DevOps")
-    return crew
+class BMADCrew:
+    """Manages a crew of members and their tasks through the BMAD pipeline."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.members: list[CrewMember] = []
+        self.tasks: list[Task] = []
+
+    # -- member management ---------------------------------------------------
+
+    def add_member(self, name: str, role: str = "developer") -> CrewMember:
+        """Add a new crew member and return it."""
+        member = CrewMember(name=name, role=role)
+        self.members.append(member)
+        return member
+
+    def remove_member(self, member_id: str) -> None:
+        """Remove a crew member by ID. Tasks remain but become unassigned."""
+        self.members = [m for m in self.members if m.id != member_id]
+
+    # -- task management -----------------------------------------------------
+
+    def create_task(
+        self,
+        title: str,
+        assignee: Optional[CrewMember] = None,
+        description: str = "",
+    ) -> Task:
+        """Create a new task in TODO status."""
+        task = Task(title=title, assignee=assignee, description=description)
+        self.tasks.append(task)
+        return task
+
+    def assign_task(self, task_id: str, member: CrewMember) -> None:
+        """Assign an existing task to a crew member."""
+        for task in self.tasks:
+            if task.id == task_id:
+                task.assignee = member
+                return
+        raise ValueError(f"Task {task_id!r} not found")
+
+    def advance_task(self, task_id: str) -> TaskStatus:
+        """Advance a task to the next BMAD stage. Returns the new status."""
+        for task in self.tasks:
+            if task.id == task_id:
+                stage_order = list(TaskStatus)
+                current_idx = stage_order.index(task.status)
+                if current_idx < len(stage_order) - 1:
+                    task.status = stage_order[current_idx + 1]
+                return task.status
+        raise ValueError(f"Task {task_id!r} not found")
+
+    # -- queries -------------------------------------------------------------
+
+    def get_tasks_by_status(self, status: TaskStatus) -> list[Task]:
+        """Return all tasks matching the given status."""
+        return [t for t in self.tasks if t.status == status]
+
+    def get_member_tasks(self, member: CrewMember) -> list[Task]:
+        """Return all tasks assigned to a specific crew member."""
+        return [t for t in self.tasks if t.assignee and t.assignee.id == member.id]
+
+    def summary(self) -> dict[str, int]:
+        """Return a count of tasks per status."""
+        counts: dict[str, int] = {s.value: 0 for s in TaskStatus}
+        for task in self.tasks:
+            counts[task.status.value] += 1
+        return counts
