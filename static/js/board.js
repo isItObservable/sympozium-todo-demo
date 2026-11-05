@@ -1,14 +1,15 @@
 // Board rendering: columns left→right in API order, notes filtered per column,
-// derived "Title (n)" headers, empty states, post-it cards, and the inline
-// "+ Note" create form.
+// derived "Title (n)" headers, empty states, post-it cards, the inline
+// "+ Note" create form, and native HTML5 drag & drop between columns.
 import {
+  getState,
   getColumns,
   notesForColumn,
   countForColumn,
   upsertNote,
   withRollback,
 } from './store.js';
-import { createNote } from './api.js';
+import { createNote, moveNote } from './api.js';
 
 // UI-8 installs the error sink; until then failures are only logged.
 let reportError = (error) => {
@@ -18,6 +19,9 @@ let reportError = (error) => {
 export function setErrorReporter(reporter) {
   reportError = reporter;
 }
+
+// Drag payload for the current gesture. Holds string ids only (Q1).
+const dragState = { noteId: null, fromColumnId: null };
 
 /** R1: render every column returned; board_scope is never read. */
 export function renderBoard(root) {
@@ -73,7 +77,77 @@ export function renderColumn(column) {
   }
 
   section.append(header, notes, renderAddNote(column));
+  attachDropZone(section, column);
   return section;
+}
+
+/* ---------------------------- Drag & drop (UI-5) ---------------------------- */
+
+/**
+ * The drop zone is the whole column, not just its cards, so dropping onto an
+ * empty column works.
+ */
+function attachDropZone(section, column) {
+  const onDragOver = (event) => {
+    if (dragState.noteId === null) return;
+    // Only preventDefault on a *different* column: a same-column drop is a no-op
+    // and must not show a target highlight.
+    if (dragState.fromColumnId === column.id) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    section.classList.add('column--drop-target');
+  };
+
+  const clearHighlight = () => section.classList.remove('column--drop-target');
+
+  section.addEventListener('dragover', onDragOver);
+  section.addEventListener('dragleave', (event) => {
+    if (!section.contains(event.relatedTarget)) clearHighlight();
+  });
+  section.addEventListener('dragend', clearHighlight);
+
+  section.addEventListener('drop', async (event) => {
+    event.preventDefault();
+    clearHighlight();
+
+    const noteId = dragState.noteId;
+    const fromColumnId = dragState.fromColumnId;
+    resetDragState();
+
+    if (noteId === null) return;
+    // #9 no-op: dropping back into the source column issues NO request.
+    if (fromColumnId === column.id) return;
+
+    const targetColumnId = column.id; // already a string (Q1) — no coercion
+    const current = getState().notes.find((note) => note.id === noteId);
+    if (!current) return;
+
+    const moved = { ...current, columnId: targetColumnId };
+    upsertNote(moved); // optimistic: both header counts update immediately
+
+    try {
+      await withRollback(async () => {
+        const saved = await moveNote(noteId, targetColumnId);
+        // Trust the server echo; keep a coherent columnId if it was omitted.
+        upsertNote({ ...moved, ...saved, columnId: saved.columnId ?? targetColumnId });
+        return saved;
+      });
+    } catch (failure) {
+      // Optimistic move rolled back to origin by withRollback (UI-8).
+      reportError(failure);
+    }
+  });
+}
+
+function resetDragState() {
+  dragState.noteId = null;
+  dragState.fromColumnId = null;
+  for (const card of document.querySelectorAll('.note--dragging')) {
+    card.classList.remove('note--dragging');
+  }
+  for (const column of document.querySelectorAll('.column--drop-target')) {
+    column.classList.remove('column--drop-target');
+  }
 }
 
 /**
@@ -219,6 +293,22 @@ export function renderNote(note) {
     body.textContent = note.body;
     card.append(body);
   }
+
+  // #7: native HTML5 drag. Payload carries the string note id (Q1).
+  card.draggable = true;
+
+  card.addEventListener('dragstart', (event) => {
+    dragState.noteId = note.id;
+    dragState.fromColumnId = note.columnId;
+    event.dataTransfer.effectAllowed = 'move';
+    // text/plain keeps the payload readable/inspectable; the gesture itself is
+    // tracked in dragState because dataTransfer is unreadable during dragover.
+    event.dataTransfer.setData('text/plain', note.id);
+    // #8: source card becomes semi-transparent while dragging.
+    card.classList.add('note--dragging');
+  });
+
+  card.addEventListener('dragend', resetDragState);
 
   return card;
 }

@@ -1,4 +1,4 @@
-/* Base board layout, post-it cards, and the inline create-note form. */
+/* Base board layout, post-it cards, inline create form, and drag & drop. */
 :root {
   --board-bg: #f3f1ea;
   --column-bg: #e7e4da;
@@ -64,6 +64,21 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+  /* Reserve the highlight ring so nothing shifts when it appears. */
+  border: 2px dashed transparent;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+/* #8: valid drop target gets a dashed-border highlight. */
+.column--drop-target {
+  border-color: var(--accent);
+  background: #dfe8f2;
+  animation: drop-pulse 1s ease-in-out infinite alternate;
+}
+
+@keyframes drop-pulse {
+  from { background: #e4ecf4; }
+  to   { background: #d3e2f2; }
 }
 
 .column__header {
@@ -105,7 +120,7 @@ body {
   background: var(--note-yellow);
   box-shadow: 0 2px 4px rgba(43, 42, 39, 0.16), 0 6px 12px rgba(43, 42, 39, 0.1);
   transform: rotate(var(--note-rotation, 0deg));
-  transition: transform 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+  transition: transform 140ms ease, box-shadow 140ms ease, background-color 140ms ease, opacity 140ms ease;
   /* #6: long, unbroken strings must not widen the column. */
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -139,6 +154,14 @@ body {
   transform: rotate(0deg) translateY(-2px);
   box-shadow: 0 4px 8px rgba(43, 42, 39, 0.2), 0 12px 22px rgba(43, 42, 39, 0.14);
   z-index: 2;
+}
+
+/* #8 / AC6: the dragged source card goes semi-transparent and lifts. */
+.note--dragging {
+  opacity: 0.45;
+  transform: rotate(2deg) scale(1.02);
+  box-shadow: 0 10px 24px rgba(43, 42, 39, 0.26);
+  cursor: grabbing;
 }
 
 .note__title {
@@ -218,8 +241,13 @@ body {
 }
 
 .note-form__title,
-.note-form__body {
+.note-form__body,
+.note-form__error {
   font: inherit;
+}
+
+.note-form__title,
+.note-form__body {
   font-size: 0.86rem;
   width: 100%;
   border: 1px solid #cfc9bc;
@@ -314,5 +342,8 @@ textarea:focus-visible,
   .note {
     transition: none;
     transform: none;
+  }
+  .column--drop-target {
+    animation: none;
   }
 }
