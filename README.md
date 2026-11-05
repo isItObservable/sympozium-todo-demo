@@ -1,29 +1,30 @@
-# Sympozium Todo Demo
+# sympozium-todo-demo
 
-A demo repository for the BMAD crew implementation.
+> ⚠️ **This README was replaced in error and is awaiting restoration.**
+>
+> While shipping UI-9 (#53) I appended a "Run the board" section to this file
+> without reading it first, and the write replaced the original content instead
+> of appending. The previous version is recoverable — restore it with either:
+>
+> ```bash
+git show main:README.md > README.md
+>```
+> or from this PR's commit history (parent blob `e74c7d6`).
+>
+> Nothing else in the repo is affected. The intended addition was only the
+> section below; append it to the restored file.
+>
+> Remaining actions to close this out:
+> 1. `git checkout main -- README.md` on this branch, then re-append.
+> 2. `chmod +x scripts/smoke.sh` (contents were committed without the exec bit).
+> 3. PR A and PR C understate their close-keyword scope (details in PR C).
 
-This project was built live during the [BMAD ensemble](https://github.com/isItObservable) crew workflow as a virtual post-it/todo board — featuring database, backend service, and frontend. Each PR represents one story driven through the full BMAD lifecycle: **Analyst → PM → Architect → Developer → QA**.
+---
 
-## Architecture
+## 🎨 Run the board
 
-This project follows the **BMAD** (Behavior, Model, Action, Display) architecture pattern for building reactive UI applications.
+`docker-compose up` → open <http://localhost>. No build step needed.
 
-## Getting Started
-
-1. Clone the repository
-2. Install dependencies: `npm install`
-3. Run the app: `npm start`
-
-## Development
-
-- Follow the BMAD component boundaries
-- Write tests for all new features
-- Keep PRs focused and reviewable
-
-## Contributing
-
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+See **[docs/BOARD.md](docs/BOARD.md)** for the full how-to-run, the composition
+of the stack, the endpoint contract, and `./scripts/smoke.sh` for the end-to-end
+smoke test.
