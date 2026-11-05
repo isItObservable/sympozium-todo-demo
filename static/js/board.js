@@ -59,11 +59,21 @@ export function renderColumn(column) {
   return section;
 }
 
-/** Minimal card render for UI-2; post-it styling and affordances land in UI-3. */
+/**
+ * Post-it card. `color` and `rotation` arrive pre-resolved from the UI-1
+ * adapter (Q4) — this component does no palette logic and no randomization, so
+ * a card's colour and tilt are stable across every re-render.
+ */
 export function renderNote(note) {
   const card = document.createElement('article');
   card.className = 'note';
   card.dataset.noteId = note.id;
+  card.dataset.color = note.color;
+  card.tabIndex = 0;
+  // Slight rotation, stable per card (not re-randomized on render).
+  if (typeof note.rotation === 'number') {
+    card.style.setProperty('--note-rotation', `${note.rotation}deg`);
+  }
 
   const title = document.createElement('h3');
   title.className = 'note__title';
@@ -72,6 +82,7 @@ export function renderNote(note) {
   card.append(title);
 
   if (note.body) {
+    // #6: body is clamped by default and revealed on hover / focus / click.
     const body = document.createElement('p');
     body.className = 'note__body';
     body.textContent = note.body;
