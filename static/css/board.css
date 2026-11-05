@@ -1,4 +1,5 @@
-/* Base board layout, post-it cards, inline create form, drag & drop, inline edit. */
+/* Base board layout, post-it cards, inline create/edit forms, drag & drop,
+   and delete confirmation. */
 :root {
   --board-bg: #f3f1ea;
   --column-bg: #e7e4da;
@@ -9,6 +10,7 @@
   --danger-bg: #fdecea;
   --danger-ink: #8f1d14;
   --danger-border: #e0a9a2;
+  --danger-solid: #b3352a;
   --note-yellow: #fff2a8;
   --note-pink: #ffc9d8;
   --note-blue: #c2e2ff;
@@ -207,6 +209,70 @@ body {
   -webkit-line-clamp: unset;
   max-height: 24rem;
   overflow-y: auto;
+}
+
+/* ---------- Card actions + delete confirmation (UI-7) ---------- */
+.note__actions {
+  display: flex;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+  /* Revealed on hover/focus so the card stays a post-it, but always reachable. */
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.note:hover .note__actions,
+.note:focus-within .note__actions,
+.note:focus .note__actions {
+  opacity: 1;
+}
+
+.note__edit,
+.note__delete,
+.note-confirm__yes,
+.note-confirm__no {
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0.18rem 0.45rem;
+  border-radius: 0.25rem;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(43, 42, 39, 0.28);
+  color: var(--ink);
+}
+
+.note__delete,
+.note-confirm__yes {
+  color: var(--danger-solid);
+  border-color: rgba(179, 53, 42, 0.45);
+}
+
+.note-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem;
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 0.3rem;
+}
+
+.note-confirm__question {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--danger-ink);
+}
+
+.note-confirm__yes:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+/* Keyboard users must be able to see the action buttons even before hover. */
+@media (hover: none) {
+  .note__actions {
+    opacity: 1;
+  }
 }
 
 /* ---------- Inline "+ Note" create form (UI-4) ---------- */
