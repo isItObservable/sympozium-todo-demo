@@ -1,7 +1,7 @@
 // Board rendering: columns left→right in API order, notes filtered per column,
 // derived "Title (n)" headers, empty states, post-it cards, the inline
 // "+ Note" create form, native HTML5 drag & drop, inline edit, and delete with
-// confirmation.
+// confirmation. Every mutation is optimistic and rolls back on failure (NFR4).
 import {
   getState,
   getColumns,
@@ -31,6 +31,10 @@ let editDraft = null;
 
 // Note id awaiting delete confirmation (string id, or null).
 let pendingDeleteId = null;
+
+// Notes removed optimistically, retained so a failed DELETE can put them back
+// in their original position (NFR4: no orphaned removals, no phantom counts).
+const pendingDeletes = new Map();
 
 /** R1: render every column returned; board_scope is never read. */
 export function renderBoard(root) {
@@ -113,7 +117,8 @@ export function renderColumn(column) {
 
 /**
  * Delete with a confirmation gate. Cancel closes the prompt and issues NO
- * request; confirming removes the card optimistically and rolls back on failure.
+ * request; confirming removes the card optimistically and restores it on
+ * failure.
  *
  * R2: the column count is never decremented — removeNote() drops the note from
  * notes[] and the header re-derives its count, so deleting the last note leaves
@@ -143,6 +148,15 @@ function renderDeleteControls(note) {
     no.className = 'note-confirm__no';
     no.textContent = 'Cancel';
 
+    // NFR2: Escape cancels the confirmation. Zero network activity.
+    confirm.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        pendingDeleteId = null;
+        rerender();
+      }
+    });
+
     // Cancel: clear the prompt only — zero network activity.
     no.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -154,11 +168,29 @@ function renderDeleteControls(note) {
       event.stopPropagation();
       yes.disabled = true;
       pendingDeleteId = null;
+
+      const state = getState();
+      const index = state.notes.findIndex((candidate) => candidate.id === note.id);
+      pendingDeletes.set(note.id, { note, index });
+
       removeNote(note.id); // optimistic removal; count re-derives from notes[]
+
       try {
-        await withRollback(() => deleteNote(note.id));
+        await deleteNote(note.id);
+        pendingDeletes.delete(note.id);
       } catch (failure) {
-        // Card returns to the board via rollback (UI-8).
+        // NFR4: restore the note at its original position, then re-render.
+        const restore = pendingDeletes.get(note.id);
+        pendingDeletes.delete(note.id);
+        if (restore) {
+          const notes = state.notes.slice();
+          const at = restore.index >= 0 && restore.index <= notes.length
+            ? restore.index
+            : notes.length;
+          notes.splice(at, 0, restore.note);
+          state.notes = notes;
+        }
+        rerender();
         reportError(failure);
       }
     });
@@ -284,6 +316,7 @@ function renderEditForm(note, draft) {
       return saved;
     } catch (failure) {
       // Card keeps last-good values; withRollback already restored the snapshot.
+      // The draft is kept so the user does not lose their typing.
       reportError(failure);
       save.disabled = false;
     }
