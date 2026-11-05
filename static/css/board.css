@@ -1,0 +1,135 @@
+/* Base board layout. Post-it styling for cards lands in UI-3. */
+:root {
+  --board-bg: #f3f1ea;
+  --column-bg: #e7e4da;
+  --ink: #2b2a27;
+  --ink-muted: #6c675d;
+  --accent: #3b6ea5;
+  --focus: #1f4e8c;
+  --danger-bg: #fdecea;
+  --danger-ink: #8f1d14;
+  --danger-border: #e0a9a2;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--ink);
+  background: var(--board-bg);
+  min-height: 100vh;
+}
+
+.app-header {
+  padding: 1rem 1.25rem 0.5rem;
+}
+
+.app-header__title {
+  margin: 0;
+  font-size: 1.35rem;
+  letter-spacing: 0.01em;
+}
+
+/* NFR3: board scrolls horizontally on narrow viewports; nothing clips vertically. */
+.board {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: 1rem 1.25rem 2rem;
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
+}
+
+.board__loading,
+.board__empty {
+  margin: 0.5rem 0;
+  color: var(--ink-muted);
+  font-size: 0.95rem;
+}
+
+.column {
+  flex: 0 0 17.5rem;
+  min-width: 17.5rem;
+  background: var(--column-bg);
+  border-radius: 0.75rem;
+  padding: 0.75rem 0.75rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.column__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.column__count {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+  font-weight: 500;
+}
+
+.column__notes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 3rem;
+}
+
+.column__empty {
+  margin: 0;
+  padding: 0.5rem 0.25rem;
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+/* Visible focus ring for every keyboard-reachable control (NFR2). */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.75rem 1.25rem 0;
+  padding: 0.6rem 0.85rem;
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+  border: 1px solid var(--danger-border);
+  border-radius: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.error-banner[hidden] {
+  display: none;
+}
+
+.error-banner__message {
+  flex: 1 1 auto;
+}
+
+.error-banner__dismiss {
+  flex: 0 0 auto;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  cursor: pointer;
+}
