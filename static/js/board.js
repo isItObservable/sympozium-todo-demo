@@ -1,15 +1,17 @@
 // Board rendering: columns left→right in API order, notes filtered per column,
 // derived "Title (n)" headers, empty states, post-it cards, the inline
-// "+ Note" create form, native HTML5 drag & drop, and inline edit.
+// "+ Note" create form, native HTML5 drag & drop, inline edit, and delete with
+// confirmation.
 import {
   getState,
   getColumns,
   notesForColumn,
   countForColumn,
   upsertNote,
+  removeNote,
   withRollback,
 } from './store.js';
-import { createNote, moveNote, updateNote } from './api.js';
+import { createNote, moveNote, updateNote, deleteNote } from './api.js';
 
 // UI-8 installs the error sink; until then failures are only logged.
 let reportError = (error) => {
@@ -26,6 +28,9 @@ const dragState = { noteId: null, fromColumnId: null };
 // In-progress edit draft, kept in memory so a board re-render cannot discard
 // the user's typing mid-edit.
 let editDraft = null;
+
+// Note id awaiting delete confirmation (string id, or null).
+let pendingDeleteId = null;
 
 /** R1: render every column returned; board_scope is never read. */
 export function renderBoard(root) {
@@ -54,6 +59,14 @@ export function renderBoard(root) {
       field.focus();
       field.setSelectionRange(field.value.length, field.value.length);
     }
+  }
+
+  // Move focus onto a freshly opened confirmation (NFR2: keyboard path).
+  if (pendingDeleteId !== null) {
+    const confirmButton = root.querySelector(
+      `[data-note-id="${CSS.escape(pendingDeleteId)}"] .note-confirm__yes`,
+    );
+    if (confirmButton) confirmButton.focus();
   }
 }
 
@@ -96,10 +109,95 @@ export function renderColumn(column) {
   return section;
 }
 
+/* ------------------------------ Delete (UI-7) ------------------------------ */
+
+/**
+ * Delete with a confirmation gate. Cancel closes the prompt and issues NO
+ * request; confirming removes the card optimistically and rolls back on failure.
+ *
+ * R2: the column count is never decremented — removeNote() drops the note from
+ * notes[] and the header re-derives its count, so deleting the last note leaves
+ * the header at (0), not (1).
+ */
+function renderDeleteControls(note) {
+  const wrap = document.createElement('div');
+  wrap.className = 'note__actions';
+
+  if (pendingDeleteId === note.id) {
+    const confirm = document.createElement('div');
+    confirm.className = 'note-confirm';
+    confirm.setAttribute('role', 'group');
+    confirm.setAttribute('aria-label', 'Confirm delete');
+
+    const question = document.createElement('span');
+    question.className = 'note-confirm__question';
+    question.textContent = 'Delete this note?';
+
+    const yes = document.createElement('button');
+    yes.type = 'button';
+    yes.className = 'note-confirm__yes';
+    yes.textContent = 'Delete';
+
+    const no = document.createElement('button');
+    no.type = 'button';
+    no.className = 'note-confirm__no';
+    no.textContent = 'Cancel';
+
+    // Cancel: clear the prompt only — zero network activity.
+    no.addEventListener('click', (event) => {
+      event.stopPropagation();
+      pendingDeleteId = null;
+      rerender();
+    });
+
+    yes.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      yes.disabled = true;
+      pendingDeleteId = null;
+      removeNote(note.id); // optimistic removal; count re-derives from notes[]
+      try {
+        await withRollback(() => deleteNote(note.id));
+      } catch (failure) {
+        // Card returns to the board via rollback (UI-8).
+        reportError(failure);
+      }
+    });
+
+    confirm.append(question, yes, no);
+    wrap.append(confirm);
+    return wrap;
+  }
+
+  const editButton = document.createElement('button');
+  editButton.type = 'button';
+  editButton.className = 'note__edit';
+  editButton.textContent = 'Edit';
+  editButton.setAttribute('aria-label', `Edit ${note.title || 'note'}`);
+  editButton.addEventListener('click', (event) => {
+    event.stopPropagation();
+    startEdit(note);
+  });
+
+  const deleteButton = document.createElement('button');
+  deleteButton.type = 'button';
+  deleteButton.className = 'note__delete';
+  deleteButton.textContent = 'Delete';
+  deleteButton.setAttribute('aria-label', `Delete ${note.title || 'note'}`);
+  deleteButton.addEventListener('click', (event) => {
+    event.stopPropagation();
+    pendingDeleteId = note.id;
+    rerender();
+  });
+
+  wrap.append(editButton, deleteButton);
+  return wrap;
+}
+
 /* ---------------------------- Inline edit (UI-6) ---------------------------- */
 
 function startEdit(note) {
   editDraft = { noteId: note.id, title: note.title, body: note.body };
+  pendingDeleteId = null;
   rerender();
 }
 
@@ -422,10 +520,16 @@ export function renderNote(note) {
     card.append(body);
   }
 
+  card.append(renderDeleteControls(note));
+
   // #7: native HTML5 drag. Payload carries the string note id (Q1).
   card.draggable = true;
 
   card.addEventListener('dragstart', (event) => {
+    if (pendingDeleteId !== null) {
+      event.preventDefault();
+      return;
+    }
     dragState.noteId = note.id;
     dragState.fromColumnId = note.columnId;
     event.dataTransfer.effectAllowed = 'move';
