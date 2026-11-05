@@ -1,6 +1,6 @@
 // Board rendering: columns left→right in API order, notes filtered per column,
 // derived "Title (n)" headers, empty states, post-it cards, the inline
-// "+ Note" create form, and native HTML5 drag & drop between columns.
+// "+ Note" create form, native HTML5 drag & drop, and inline edit.
 import {
   getState,
   getColumns,
@@ -9,7 +9,7 @@ import {
   upsertNote,
   withRollback,
 } from './store.js';
-import { createNote, moveNote } from './api.js';
+import { createNote, moveNote, updateNote } from './api.js';
 
 // UI-8 installs the error sink; until then failures are only logged.
 let reportError = (error) => {
@@ -22,6 +22,10 @@ export function setErrorReporter(reporter) {
 
 // Drag payload for the current gesture. Holds string ids only (Q1).
 const dragState = { noteId: null, fromColumnId: null };
+
+// In-progress edit draft, kept in memory so a board re-render cannot discard
+// the user's typing mid-edit.
+let editDraft = null;
 
 /** R1: render every column returned; board_scope is never read. */
 export function renderBoard(root) {
@@ -37,8 +41,19 @@ export function renderBoard(root) {
     return;
   }
 
+  const focusId = editDraft ? editDraft.noteId : null;
+
   for (const column of columns) {
     root.append(renderColumn(column));
+  }
+
+  // Restore focus + caret to the edit form after a re-render.
+  if (focusId !== null) {
+    const field = root.querySelector(`[data-note-id="${CSS.escape(focusId)}"] .note-edit__title`);
+    if (field) {
+      field.focus();
+      field.setSelectionRange(field.value.length, field.value.length);
+    }
   }
 }
 
@@ -79,6 +94,109 @@ export function renderColumn(column) {
   section.append(header, notes, renderAddNote(column));
   attachDropZone(section, column);
   return section;
+}
+
+/* ---------------------------- Inline edit (UI-6) ---------------------------- */
+
+function startEdit(note) {
+  editDraft = { noteId: note.id, title: note.title, body: note.body };
+  rerender();
+}
+
+function cancelEdit() {
+  editDraft = null;
+  rerender();
+}
+
+/**
+ * Inline edit form, pre-filled from the draft. Save issues PUT /api/notes/:id
+ * and the card reflects the saved server values; Escape cancels with no request.
+ */
+function renderEditForm(note, draft) {
+  const form = document.createElement('form');
+  form.className = 'note-edit';
+  form.noValidate = true;
+
+  const titleInput = document.createElement('input');
+  titleInput.type = 'text';
+  titleInput.className = 'note-edit__title';
+  titleInput.value = draft.title;
+  titleInput.setAttribute('aria-label', 'Edit note title');
+  titleInput.maxLength = 120;
+
+  const bodyInput = document.createElement('textarea');
+  bodyInput.className = 'note-edit__body';
+  bodyInput.value = draft.body;
+  bodyInput.setAttribute('aria-label', 'Edit note details');
+  bodyInput.rows = 3;
+
+  const actions = document.createElement('div');
+  actions.className = 'note-edit__actions';
+
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.className = 'note-edit__save';
+  save.textContent = 'Save';
+
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'note-edit__cancel';
+  cancel.textContent = 'Cancel';
+
+  actions.append(save, cancel);
+  form.append(titleInput, bodyInput, actions);
+
+  // Keep the draft current so a re-render preserves in-flight typing.
+  const sync = () => {
+    if (editDraft && editDraft.noteId === note.id) {
+      editDraft.title = titleInput.value;
+      editDraft.body = bodyInput.value;
+    }
+  };
+  titleInput.addEventListener('input', sync);
+  bodyInput.addEventListener('input', sync);
+
+  cancel.addEventListener('click', () => cancelEdit());
+
+  // NFR2: Escape cancels and discards changes without a request.
+  form.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      cancelEdit();
+    }
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const title = titleInput.value.trim();
+    if (!title) {
+      titleInput.focus();
+      return;
+    }
+
+    save.disabled = true;
+    try {
+      const saved = await withRollback(async () => {
+        const result = await updateNote(note.id, { title, body: bodyInput.value.trim() });
+        upsertNote({ ...note, ...result, id: note.id, columnId: note.columnId });
+        return result;
+      });
+      editDraft = null;
+      rerender();
+      return saved;
+    } catch (failure) {
+      // Card keeps last-good values; withRollback already restored the snapshot.
+      reportError(failure);
+      save.disabled = false;
+    }
+  });
+
+  return form;
+}
+
+function rerender() {
+  const root = document.getElementById('board');
+  if (root) renderBoard(root);
 }
 
 /* ---------------------------- Drag & drop (UI-5) ---------------------------- */
@@ -149,6 +267,8 @@ function resetDragState() {
     column.classList.remove('column--drop-target');
   }
 }
+
+/* ------------------------------ Create note (UI-4) ------------------------------ */
 
 /**
  * "+ Note" control and its inline form (#4). Opens in place, submits
@@ -264,6 +384,8 @@ function renderAddNote(column) {
   return wrap;
 }
 
+/* ------------------------------- Note card ---------------------------------- */
+
 /**
  * Post-it card. `color` and `rotation` arrive pre-resolved from the UI-1
  * adapter (Q4) — this component does no palette logic and no randomization, so
@@ -278,6 +400,12 @@ export function renderNote(note) {
   // Slight rotation, stable per card (not re-randomized on render).
   if (typeof note.rotation === 'number') {
     card.style.setProperty('--note-rotation', `${note.rotation}deg`);
+  }
+
+  if (editDraft && editDraft.noteId === note.id) {
+    card.classList.add('note--editing');
+    card.append(renderEditForm(note, editDraft));
+    return card;
   }
 
   const title = document.createElement('h3');
