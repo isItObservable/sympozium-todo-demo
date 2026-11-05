@@ -1,0 +1,224 @@
+// Board rendering: columns left→right in API order, notes filtered per column,
+// derived "Title (n)" headers, empty states, post-it cards, and the inline
+// "+ Note" create form.
+import {
+  getColumns,
+  notesForColumn,
+  countForColumn,
+  upsertNote,
+  withRollback,
+} from './store.js';
+import { createNote } from './api.js';
+
+// UI-8 installs the error sink; until then failures are only logged.
+let reportError = (error) => {
+  if (typeof console !== 'undefined') console.error(error);
+};
+
+export function setErrorReporter(reporter) {
+  reportError = reporter;
+}
+
+/** R1: render every column returned; board_scope is never read. */
+export function renderBoard(root) {
+  const columns = getColumns();
+  root.innerHTML = '';
+  root.setAttribute('aria-busy', 'false');
+
+  if (!columns.length) {
+    const message = document.createElement('p');
+    message.className = 'board__empty';
+    message.textContent = 'No columns yet. Add a column to start your board.';
+    root.append(message);
+    return;
+  }
+
+  for (const column of columns) {
+    root.append(renderColumn(column));
+  }
+}
+
+export function renderColumn(column) {
+  const section = document.createElement('section');
+  section.className = 'column';
+  section.dataset.columnId = column.id;
+  section.setAttribute('aria-label', column.title || 'Column');
+
+  const header = document.createElement('h2');
+  header.className = 'column__header';
+
+  const title = document.createElement('span');
+  title.className = 'column__title';
+  title.textContent = column.title || 'Untitled';
+
+  // #3: count derived from local notes[] on every render — never stored (R2).
+  const count = document.createElement('span');
+  count.className = 'column__count';
+  count.textContent = `(${countForColumn(column.id)})`;
+
+  header.append(title, count);
+
+  const notes = document.createElement('div');
+  notes.className = 'column__notes';
+
+  const columnNotes = notesForColumn(column.id);
+  if (!columnNotes.length) {
+    // NFR6: explicit zero-notes state.
+    const empty = document.createElement('p');
+    empty.className = 'column__empty';
+    empty.textContent = 'No notes yet.';
+    notes.append(empty);
+  } else {
+    for (const note of columnNotes) notes.append(renderNote(note));
+  }
+
+  section.append(header, notes, renderAddNote(column));
+  return section;
+}
+
+/**
+ * "+ Note" control and its inline form (#4). Opens in place, submits
+ * POST /api/notes/ with {title, body, columnId}, and on 201 the new card is
+ * appended from store state — no page reload.
+ */
+function renderAddNote(column) {
+  const wrap = document.createElement('div');
+  wrap.className = 'column__add';
+
+  const openButton = document.createElement('button');
+  openButton.type = 'button';
+  openButton.className = 'column__add-button';
+  openButton.textContent = '+ Note';
+  openButton.setAttribute('aria-expanded', 'false');
+
+  const form = document.createElement('form');
+  form.className = 'note-form';
+  form.hidden = true;
+  form.noValidate = true;
+
+  const titleInput = document.createElement('input');
+  titleInput.type = 'text';
+  titleInput.className = 'note-form__title';
+  titleInput.placeholder = 'Title';
+  titleInput.setAttribute('aria-label', `New note title in ${column.title || 'column'}`);
+  titleInput.maxLength = 120;
+
+  const bodyInput = document.createElement('textarea');
+  bodyInput.className = 'note-form__body';
+  bodyInput.placeholder = 'Details (optional)';
+  bodyInput.setAttribute('aria-label', 'New note details');
+  bodyInput.rows = 2;
+
+  const actions = document.createElement('div');
+  actions.className = 'note-form__actions';
+
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.className = 'note-form__save';
+  save.textContent = 'Add';
+
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'note-form__cancel';
+  cancel.textContent = 'Cancel';
+
+  const error = document.createElement('p');
+  error.className = 'note-form__error';
+  error.hidden = true;
+
+  actions.append(save, cancel);
+  form.append(titleInput, bodyInput, actions, error);
+  wrap.append(openButton, form);
+
+  const close = () => {
+    form.hidden = true;
+    openButton.hidden = false;
+    openButton.setAttribute('aria-expanded', 'false');
+    form.reset();
+    error.hidden = true;
+    openButton.focus();
+  };
+
+  openButton.addEventListener('click', () => {
+    openButton.hidden = true;
+    form.hidden = false;
+    openButton.setAttribute('aria-expanded', 'true');
+    titleInput.focus();
+  });
+
+  cancel.addEventListener('click', close);
+
+  // Escape closes the inline form without a request (NFR2).
+  form.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      close();
+    }
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const title = titleInput.value.trim();
+    // Empty title is blocked client-side before any request is made (#4).
+    if (!title) {
+      error.textContent = 'Give the note a title first.';
+      error.hidden = false;
+      titleInput.focus();
+      return;
+    }
+
+    error.hidden = true;
+    save.disabled = true;
+    try {
+      const created = await withRollback(() => createNote({
+        title,
+        body: bodyInput.value.trim(),
+        columnId: column.id,
+      }));
+      upsertNote(created);
+      close();
+    } catch (failure) {
+      // Failure path delegates to UI-8; no half-added card is left behind.
+      error.textContent = failure.message || 'Could not add the note.';
+      error.hidden = false;
+      reportError(failure);
+    } finally {
+      save.disabled = false;
+    }
+  });
+
+  return wrap;
+}
+
+/**
+ * Post-it card. `color` and `rotation` arrive pre-resolved from the UI-1
+ * adapter (Q4) — this component does no palette logic and no randomization, so
+ * a card's colour and tilt are stable across every re-render.
+ */
+export function renderNote(note) {
+  const card = document.createElement('article');
+  card.className = 'note';
+  card.dataset.noteId = note.id;
+  card.dataset.color = note.color;
+  card.tabIndex = 0;
+  // Slight rotation, stable per card (not re-randomized on render).
+  if (typeof note.rotation === 'number') {
+    card.style.setProperty('--note-rotation', `${note.rotation}deg`);
+  }
+
+  const title = document.createElement('h3');
+  title.className = 'note__title';
+  title.textContent = note.title || '(untitled)';
+
+  card.append(title);
+
+  if (note.body) {
+    // #6: body is clamped by default and revealed on hover / focus / click.
+    const body = document.createElement('p');
+    body.className = 'note__body';
+    body.textContent = note.body;
+    card.append(body);
+  }
+
+  return card;
+}

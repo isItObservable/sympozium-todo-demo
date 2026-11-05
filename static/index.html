@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sticky Board</title>
+    <link rel="stylesheet" href="./css/board.css" />
+  </head>
+  <body>
+    <!-- NFR4: non-blocking, keyboard-dismissible error surface. Filled by main.js. -->
+    <div id="error-banner" class="error-banner" role="status" aria-live="polite" hidden>
+      <span class="error-banner__message"></span>
+      <button type="button" class="error-banner__dismiss" aria-label="Dismiss error">Dismiss</button>
+    </div>
+
+    <header class="app-header">
+      <h1 class="app-header__title">Sticky Board</h1>
+    </header>
+
+    <main id="board" class="board" aria-label="Kanban board" aria-busy="true">
+      <p class="board__loading">Loading board…</p>
+    </main>
+
+    <script type="module" src="./js/main.js"></script>
+  </body>
+</html>
