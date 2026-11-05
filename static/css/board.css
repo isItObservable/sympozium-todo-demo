@@ -1,4 +1,4 @@
-/* Base board layout, post-it cards, inline create form, and drag & drop. */
+/* Base board layout, post-it cards, inline create form, drag & drop, inline edit. */
 :root {
   --board-bg: #f3f1ea;
   --column-bg: #e7e4da;
@@ -164,6 +164,14 @@ body {
   cursor: grabbing;
 }
 
+/* Editing card sits flat so the form is readable. */
+.note--editing,
+.note--editing:hover {
+  transform: none;
+  cursor: auto;
+  z-index: 3;
+}
+
 .note__title {
   margin: 0;
   font-family: "Segoe Print", "Bradley Hand", "Comic Sans MS", ui-rounded, cursive;
@@ -226,7 +234,8 @@ body {
   background: #fff;
 }
 
-.note-form {
+.note-form,
+.note-edit {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
@@ -242,12 +251,9 @@ body {
 
 .note-form__title,
 .note-form__body,
-.note-form__error {
+.note-edit__title,
+.note-edit__body {
   font: inherit;
-}
-
-.note-form__title,
-.note-form__body {
   font-size: 0.86rem;
   width: 100%;
   border: 1px solid #cfc9bc;
@@ -255,18 +261,22 @@ body {
   padding: 0.35rem 0.45rem;
 }
 
-.note-form__body {
+.note-form__body,
+.note-edit__body {
   resize: vertical;
   min-height: 3rem;
 }
 
-.note-form__actions {
+.note-form__actions,
+.note-edit__actions {
   display: flex;
   gap: 0.4rem;
 }
 
 .note-form__save,
-.note-form__cancel {
+.note-form__cancel,
+.note-edit__save,
+.note-edit__cancel {
   font: inherit;
   font-size: 0.82rem;
   padding: 0.28rem 0.6rem;
@@ -274,18 +284,21 @@ body {
   cursor: pointer;
 }
 
-.note-form__save {
+.note-form__save,
+.note-edit__save {
   color: #fff;
   background: var(--accent);
   border: 1px solid var(--accent);
 }
 
-.note-form__save:disabled {
+.note-form__save:disabled,
+.note-edit__save:disabled {
   opacity: 0.6;
   cursor: progress;
 }
 
-.note-form__cancel {
+.note-form__cancel,
+.note-edit__cancel {
   color: var(--ink);
   background: transparent;
   border: 1px solid #cfc9bc;
